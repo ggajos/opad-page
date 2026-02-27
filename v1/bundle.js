@@ -2319,7 +2319,7 @@ var require_main = __commonJS({
         const p = doc.requestFullscreen?.() ?? doc.webkitRequestFullscreen?.();
         if (p instanceof Promise) {
           p.then(() => {
-            screen.orientation?.lock?.("landscape-primary").catch(() => {
+            screen.orientation?.lock?.("landscape").catch(() => {
             });
           }).catch(() => {
           });
