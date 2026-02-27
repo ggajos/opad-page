@@ -618,7 +618,11 @@ var init_input = __esm({
           inputMode: "none"
         });
         __publicField(this, "_rawCursor", { x: 0.5, y: 0.5 });
-        __publicField(this, "_smoothingSpeed", 16);
+        __publicField(this, "_prevRaw", { x: 0.5, y: 0.5 });
+        __publicField(this, "_velocity", { x: 0, y: 0 });
+        __publicField(this, "_lastResultTime", 0);
+        __publicField(this, "_smoothingSpeed", 28);
+        __publicField(this, "_predictionMs", 35);
         __publicField(this, "_confidence", 0);
         __publicField(this, "_landmarks", null);
       }
@@ -637,8 +641,11 @@ var init_input = __esm({
       update(dt) {
         const factor = 1 - Math.exp(-this._smoothingSpeed * dt);
         if (this._landmarks) {
-          this.cursor.x += (this._rawCursor.x - this.cursor.x) * factor;
-          this.cursor.y += (this._rawCursor.y - this.cursor.y) * factor;
+          const predSec = this._predictionMs / 1e3;
+          const targetX = Math.max(0, Math.min(1, this._rawCursor.x + this._velocity.x * predSec));
+          const targetY = Math.max(0, Math.min(1, this._rawCursor.y + this._velocity.y * predSec));
+          this.cursor.x += (targetX - this.cursor.x) * factor;
+          this.cursor.y += (targetY - this.cursor.y) * factor;
         }
         this.debugInfo = {
           detected: this._landmarks !== null,
@@ -675,8 +682,22 @@ var init_input = __esm({
             }
             const avgX = sumX / PALM_LANDMARKS.length;
             const avgY = sumY / PALM_LANDMARKS.length;
-            this._rawCursor.x = this._mapRange(1 - avgX, 0.15, 0.85, 0, 1);
-            this._rawCursor.y = this._mapRange(avgY, 0.15, 0.85, 0, 1);
+            const newX = this._mapRange(1 - avgX, 0.15, 0.85, 0, 1);
+            const newY = this._mapRange(avgY, 0.15, 0.85, 0, 1);
+            const now = performance.now();
+            const elapsed = (now - this._lastResultTime) / 1e3;
+            if (this._lastResultTime > 0 && elapsed > 0 && elapsed < 0.2) {
+              this._velocity.x = (newX - this._prevRaw.x) / elapsed;
+              this._velocity.y = (newY - this._prevRaw.y) / elapsed;
+            } else {
+              this._velocity.x = 0;
+              this._velocity.y = 0;
+            }
+            this._prevRaw.x = this._rawCursor.x;
+            this._prevRaw.y = this._rawCursor.y;
+            this._rawCursor.x = newX;
+            this._rawCursor.y = newY;
+            this._lastResultTime = now;
             this.mode = "hand";
             this.detected = true;
           } else {
@@ -688,8 +709,8 @@ var init_input = __esm({
           onFrame: async () => {
             await hands.send({ image: this.video });
           },
-          width: 1280,
-          height: 720
+          width: 640,
+          height: 480
         });
         await camera.start();
         this.mode = "hand";
