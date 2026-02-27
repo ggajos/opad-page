@@ -596,13 +596,71 @@ var init_audio = __esm({
 });
 
 // src/browser/input.ts
+function deg2rad(d) {
+  return d * Math.PI / 180;
+}
+function orientationMatrix(alphaDeg, betaDeg, gammaDeg) {
+  const a = deg2rad(alphaDeg);
+  const b = deg2rad(betaDeg);
+  const g = deg2rad(gammaDeg);
+  const ca = Math.cos(a);
+  const sa = Math.sin(a);
+  const cb = Math.cos(b);
+  const sb = Math.sin(b);
+  const cg = Math.cos(g);
+  const sg = Math.sin(g);
+  return [
+    ca * cg - sa * sb * sg,
+    -sa * cb,
+    ca * sg + sa * sb * cg,
+    sa * cg + ca * sb * sg,
+    ca * cb,
+    sa * sg - ca * sb * cg,
+    -cb * sg,
+    sb,
+    cb * cg
+  ];
+}
+function transpose3x3(m) {
+  return [
+    m[0],
+    m[3],
+    m[6],
+    m[1],
+    m[4],
+    m[7],
+    m[2],
+    m[5],
+    m[8]
+  ];
+}
+function mul3x3(a, b) {
+  return [
+    a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+    a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+    a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+    a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+    a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+    a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+    a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+    a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+    a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
+  ];
+}
+function screenAngle() {
+  const orient = screen.orientation;
+  if (orient && typeof orient.angle === "number") {
+    return deg2rad(orient.angle);
+  }
+  return deg2rad(window.orientation || 0);
+}
 function clamp2(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 var GYRO_RANGE_DEG, InputManager;
 var init_input = __esm({
   "src/browser/input.ts"() {
-    GYRO_RANGE_DEG = 30;
+    GYRO_RANGE_DEG = 25;
     InputManager = class {
       constructor(_canvas) {
         this._canvas = _canvas;
@@ -623,10 +681,10 @@ var init_input = __esm({
         __publicField(this, "_smoothingSpeed", 20);
         // Gyro state
         __publicField(this, "_hasGyro", false);
-        __publicField(this, "_refBeta", null);
-        __publicField(this, "_refGamma", null);
+        __publicField(this, "_curAlpha", 0);
         __publicField(this, "_curBeta", 0);
         __publicField(this, "_curGamma", 0);
+        __publicField(this, "_refMatrix", null);
       }
       /** Request gyro permission (must be called from a user gesture on iOS). */
       async requestGyroPermission() {
@@ -675,28 +733,47 @@ var init_input = __esm({
       }
       /** Reset the gyro reference to the current phone orientation. */
       recenter() {
-        this._refBeta = this._curBeta;
-        this._refGamma = this._curGamma;
+        this._refMatrix = orientationMatrix(
+          this._curAlpha,
+          this._curBeta,
+          this._curGamma
+        );
       }
       // ---- Gyro input ----
       _initGyro() {
         window.addEventListener("deviceorientation", (e) => {
-          if (e.beta === null || e.gamma === null) return;
+          if (e.alpha === null || e.beta === null || e.gamma === null) return;
           this._hasGyro = true;
+          this._curAlpha = e.alpha;
           this._curBeta = e.beta;
           this._curGamma = e.gamma;
-          if (this._refBeta === null) {
-            this._refBeta = e.beta;
-            this._refGamma = e.gamma;
+          if (this._refMatrix === null) {
+            this._refMatrix = orientationMatrix(e.alpha, e.beta, e.gamma);
           }
         });
       }
       _updateGyro() {
-        if (this._refBeta === null || this._refGamma === null) return;
-        const dGamma = this._curGamma - this._refGamma;
-        const dBeta = this._curBeta - this._refBeta;
-        this._rawCursor.x = clamp2(0.5 + dGamma / (GYRO_RANGE_DEG * 2), 0, 1);
-        this._rawCursor.y = clamp2(0.5 + dBeta / (GYRO_RANGE_DEG * 2), 0, 1);
+        if (this._refMatrix === null) return;
+        const curMatrix = orientationMatrix(
+          this._curAlpha,
+          this._curBeta,
+          this._curGamma
+        );
+        const refInv = transpose3x3(this._refMatrix);
+        const rel = mul3x3(refInv, curMatrix);
+        const vx = rel[2];
+        const vy = rel[5];
+        const vz = rel[8];
+        const devYaw = Math.atan2(vx, vz);
+        const devPitch = Math.atan2(-vy, vz);
+        const sa = screenAngle();
+        const cosA = Math.cos(sa);
+        const sinA = Math.sin(sa);
+        const screenX = devYaw * cosA - devPitch * sinA;
+        const screenY = devYaw * sinA + devPitch * cosA;
+        const rangRad = deg2rad(GYRO_RANGE_DEG);
+        this._rawCursor.x = clamp2(0.5 + screenX / (2 * rangRad), 0, 1);
+        this._rawCursor.y = clamp2(0.5 + screenY / (2 * rangRad), 0, 1);
       }
       // ---- Mouse input (desktop fallback) ----
       _initMouse() {
@@ -1027,6 +1104,7 @@ void main() {
         __publicField(this, "_debugInfo", null);
         __publicField(this, "_video");
         __publicField(this, "muteButtonRect", { x: 0, y: 0, w: 0, h: 0 });
+        __publicField(this, "buildTimestamp", "dev");
         this._video = video;
         const gl = glCanvas.getContext("webgl2", { alpha: false, antialias: false, premultipliedAlpha: false });
         if (!gl) throw new Error("WebGL 2 not supported");
@@ -1928,8 +2006,12 @@ void main() {
         ctx.globalAlpha = pulse;
         ctx.font = `${s(0.018)}px 'Orbitron', sans-serif`;
         ctx.fillStyle = "#0ff";
-        ctx.fillText("TAP TO START", cx, this.h - s(0.06));
+        ctx.fillText("TAP TO START", cx, this.h - s(0.1));
         ctx.globalAlpha = 1;
+        ctx.font = `${s(0.01)}px 'Orbitron', sans-serif`;
+        ctx.fillStyle = "#445";
+        ctx.textAlign = "center";
+        ctx.fillText(`Grzegorz Gajos  \u2022  ggajos.com  \u2022  build ${this.buildTimestamp}`, cx, this.h - s(0.03));
       }
       /** Draw a simple schematic: phone held in left hand, right hand waving at camera. */
       drawPhoneIllustration(cx, cy, s) {
@@ -2341,6 +2423,7 @@ var require_main = __commonJS({
     var audio = new AudioManager();
     var input = new InputManager(canvas);
     var renderer = new Renderer(canvas, hudCanvas, video);
+    renderer.buildTimestamp = true ? "2026-02-27 17:14" : "dev";
     var loadedBeatmap = null;
     var game = new Game(generateBeatmap());
     var musicMode = false;
