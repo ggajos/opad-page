@@ -3,14 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
   <title>OPAD</title>
-  <link rel="manifest" href="manifest.json" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="mobile-web-app-capable" content="yes" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet" />
@@ -40,30 +33,27 @@
       opacity: 0;
       pointer-events: none;
     }
-    /* Landscape warning overlay — shown only on mobile-sized screens in landscape */
-    #rotate-warning {
+    #cam-debug {
       display: none;
       position: fixed;
-      inset: 0;
-      z-index: 9999;
-      background: #08080f;
-      color: #0ff;
-      font-family: "Orbitron", sans-serif;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      gap: 1rem;
+      bottom: 12px; left: 12px;
+      width: 200px; height: 150px;
+      z-index: 10;
+      border: 1px solid rgba(0, 255, 255, 0.4);
+      border-radius: 6px;
+      overflow: hidden;
+      background: #000;
     }
-    #rotate-warning .icon {
-      font-size: 3rem;
+    #cam-debug video {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
     }
-    #rotate-warning .msg {
-      font-size: 1rem;
-      opacity: 0.8;
-    }
-    @media (orientation: portrait) and (max-width: 500px) {
-      #rotate-warning { display: flex; }
+    #cam-debug canvas {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
     }
   </style>
 </head>
@@ -71,17 +61,15 @@
   <canvas id="game"></canvas>
   <canvas id="hud"></canvas>
   <video id="cam" autoplay playsinline></video>
-
-  <!-- Landscape warning (CSS-driven, only visible on small landscape screens) -->
-  <div id="rotate-warning">
-    <div class="icon">&#x21BB;</div>
-    <div class="msg">Please rotate your device to landscape mode</div>
+  <div id="cam-debug">
+    <video id="cam-preview" autoplay playsinline></video>
+    <canvas id="cam-overlay"></canvas>
   </div>
 
   <!-- MediaPipe Hands (loaded before bundle so globals are available) -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1675466862/camera_utils.js" crossorigin="anonymous"></script>
 
-  <script type="module" src="bundle.js?v=1772212477"></script>
+  <script type="module" src="bundle.js"></script>
 </body>
 </html>

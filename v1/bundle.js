@@ -596,193 +596,116 @@ var init_audio = __esm({
 });
 
 // src/browser/input.ts
-function deg2rad(d) {
-  return d * Math.PI / 180;
-}
-function orientationMatrix(alphaDeg, betaDeg, gammaDeg) {
-  const a = deg2rad(alphaDeg);
-  const b = deg2rad(betaDeg);
-  const g = deg2rad(gammaDeg);
-  const ca = Math.cos(a);
-  const sa = Math.sin(a);
-  const cb = Math.cos(b);
-  const sb = Math.sin(b);
-  const cg = Math.cos(g);
-  const sg = Math.sin(g);
-  return [
-    ca * cg - sa * sb * sg,
-    -sa * cb,
-    ca * sg + sa * sb * cg,
-    sa * cg + ca * sb * sg,
-    ca * cb,
-    sa * sg - ca * sb * cg,
-    -cb * sg,
-    sb,
-    cb * cg
-  ];
-}
-function transpose3x3(m) {
-  return [
-    m[0],
-    m[3],
-    m[6],
-    m[1],
-    m[4],
-    m[7],
-    m[2],
-    m[5],
-    m[8]
-  ];
-}
-function mul3x3(a, b) {
-  return [
-    a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
-    a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
-    a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
-    a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
-    a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
-    a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
-    a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
-    a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
-    a[6] * b[2] + a[7] * b[5] + a[8] * b[8]
-  ];
-}
-function screenAngle() {
-  const orient = screen.orientation;
-  if (orient && typeof orient.angle === "number") {
-    return deg2rad(orient.angle);
-  }
-  return deg2rad(window.orientation || 0);
-}
-function clamp2(v, min, max) {
-  return Math.max(min, Math.min(max, v));
-}
-var GYRO_RANGE_DEG, InputManager;
+var CURSOR_LANDMARK, HAND_CLAMP_MIN, HAND_CLAMP_MAX, InputManager;
 var init_input = __esm({
   "src/browser/input.ts"() {
-    GYRO_RANGE_DEG = 25;
+    CURSOR_LANDMARK = 8;
+    HAND_CLAMP_MIN = 0.25;
+    HAND_CLAMP_MAX = 0.75;
     InputManager = class {
-      constructor(_canvas) {
-        this._canvas = _canvas;
-        /** Smoothed cursor position in game coordinates [0,1]. */
+      constructor(canvas, video) {
+        this.canvas = canvas;
+        this.video = video;
         __publicField(this, "cursor", { x: 0.5, y: 0.5 });
         __publicField(this, "mode", "none");
         __publicField(this, "detected", false);
-        /** Debug information for the overlay. */
-        __publicField(this, "debugInfo", {
-          detected: false,
-          confidence: 0,
-          landmarks: null,
-          cursorRaw: { x: 0.5, y: 0.5 },
-          cursorSmoothed: { x: 0.5, y: 0.5 },
-          inputMode: "none"
-        });
-        __publicField(this, "_rawCursor", { x: 0.5, y: 0.5 });
-        __publicField(this, "_smoothingSpeed", 20);
-        // Gyro state
-        __publicField(this, "_hasGyro", false);
-        __publicField(this, "_curAlpha", 0);
-        __publicField(this, "_curBeta", 0);
-        __publicField(this, "_curGamma", 0);
-        __publicField(this, "_refMatrix", null);
-      }
-      /** Request gyro permission (must be called from a user gesture on iOS). */
-      async requestGyroPermission() {
-        const DOE = DeviceOrientationEvent;
-        if (typeof DOE.requestPermission === "function") {
-          try {
-            const result = await DOE.requestPermission();
-            return result === "granted";
-          } catch {
-            return false;
-          }
-        }
-        return true;
-      }
-      async init() {
-        if (window.DeviceOrientationEvent) {
-          const permitted = await this.requestGyroPermission();
-          if (permitted) {
-            this._initGyro();
-            await new Promise((resolve) => setTimeout(resolve, 200));
-            if (this._hasGyro) {
-              this.mode = "gyro";
-              return "gyro";
-            }
-          }
-        }
-        this._initMouse();
-        this.mode = "mouse";
-        return "mouse";
-      }
-      update(dt) {
-        if (this.mode === "gyro" && this._hasGyro) {
-          this._updateGyro();
-        }
-        const factor = 1 - Math.exp(-this._smoothingSpeed * dt);
-        this.cursor.x += (this._rawCursor.x - this.cursor.x) * factor;
-        this.cursor.y += (this._rawCursor.y - this.cursor.y) * factor;
-        this.debugInfo = {
-          detected: this.mode !== "none",
-          confidence: this.mode === "gyro" ? 1 : 0,
-          landmarks: null,
-          cursorRaw: { x: this._rawCursor.x, y: this._rawCursor.y },
-          cursorSmoothed: { x: this.cursor.x, y: this.cursor.y },
-          inputMode: this.mode
-        };
-      }
-      /** Reset the gyro reference to the current phone orientation. */
-      recenter() {
-        this._refMatrix = orientationMatrix(
-          this._curAlpha,
-          this._curBeta,
-          this._curGamma
-        );
-      }
-      // ---- Gyro input ----
-      _initGyro() {
-        window.addEventListener("deviceorientation", (e) => {
-          if (e.alpha === null || e.beta === null || e.gamma === null) return;
-          this._hasGyro = true;
-          this._curAlpha = e.alpha;
-          this._curBeta = e.beta;
-          this._curGamma = e.gamma;
-          if (this._refMatrix === null) {
-            this._refMatrix = orientationMatrix(e.alpha, e.beta, e.gamma);
-          }
-        });
-      }
-      _updateGyro() {
-        if (this._refMatrix === null) return;
-        const curMatrix = orientationMatrix(
-          this._curAlpha,
-          this._curBeta,
-          this._curGamma
-        );
-        const refInv = transpose3x3(this._refMatrix);
-        const rel = mul3x3(refInv, curMatrix);
-        const vx = rel[2];
-        const vy = rel[5];
-        const vz = rel[8];
-        const devYaw = Math.atan2(vx, vz);
-        const devPitch = Math.atan2(-vy, vz);
-        const sa = screenAngle();
-        const cosA = Math.cos(sa);
-        const sinA = Math.sin(sa);
-        const screenX = devYaw * cosA - devPitch * sinA;
-        const screenY = devYaw * sinA + devPitch * cosA;
-        const rangRad = deg2rad(GYRO_RANGE_DEG);
-        this._rawCursor.x = clamp2(0.5 + screenX / (2 * rangRad), 0, 1);
-        this._rawCursor.y = clamp2(0.5 + screenY / (2 * rangRad), 0, 1);
-      }
-      // ---- Mouse input (desktop fallback) ----
-      _initMouse() {
-        this._canvas.addEventListener("mousemove", (e) => {
-          const rect = this._canvas.getBoundingClientRect();
-          this._rawCursor.x = clamp2((e.clientX - rect.left) / rect.width, 0, 1);
-          this._rawCursor.y = clamp2((e.clientY - rect.top) / rect.height, 0, 1);
+        /** Latest raw hand landmarks (21 points) from MediaPipe, or null. */
+        __publicField(this, "landmarks", null);
+        /** Which landmark index drives the cursor. */
+        __publicField(this, "cursorLandmarkIndex", CURSOR_LANDMARK);
+        /** Hand input clamp boundaries (normalized camera coords). */
+        __publicField(this, "clampMin", HAND_CLAMP_MIN);
+        __publicField(this, "clampMax", HAND_CLAMP_MAX);
+        __publicField(this, "_raw", { x: 0.5, y: 0.5 });
+        __publicField(this, "_smoothingSpeed", 12);
+        canvas.addEventListener("mousemove", (e) => {
+          this._raw.x = e.clientX / window.innerWidth;
+          this._raw.y = e.clientY / window.innerHeight;
+          if (this.mode !== "hand") this.mode = "mouse";
           this.detected = true;
         });
+        canvas.addEventListener(
+          "touchstart",
+          (e) => {
+            e.preventDefault();
+            const t = e.touches[0];
+            this._raw.x = t.clientX / window.innerWidth;
+            this._raw.y = t.clientY / window.innerHeight;
+            if (this.mode !== "hand") this.mode = "touch";
+            this.detected = true;
+          },
+          { passive: false }
+        );
+        canvas.addEventListener(
+          "touchmove",
+          (e) => {
+            e.preventDefault();
+            const t = e.touches[0];
+            this._raw.x = t.clientX / window.innerWidth;
+            this._raw.y = t.clientY / window.innerHeight;
+            if (this.mode !== "hand") this.mode = "touch";
+            this.detected = true;
+          },
+          { passive: false }
+        );
+      }
+      async init() {
+        try {
+          await this._initHandTracking();
+          return "hand";
+        } catch (e) {
+          console.warn(
+            "Hand tracking unavailable, using mouse/touch:",
+            e.message
+          );
+          return this.mode === "none" ? "mouse" : this.mode;
+        }
+      }
+      update(dt) {
+        const factor = 1 - Math.exp(-this._smoothingSpeed * dt);
+        this.cursor.x += (this._raw.x - this.cursor.x) * factor;
+        this.cursor.y += (this._raw.y - this.cursor.y) * factor;
+      }
+      async _initHandTracking() {
+        const W = window;
+        if (!W.Hands || !W.Camera) {
+          throw new Error("MediaPipe not loaded");
+        }
+        const hands = new W.Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+        hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 0,
+          minDetectionConfidence: 0.6,
+          minTrackingConfidence: 0.5
+        });
+        hands.onResults((results) => {
+          if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const hand = results.multiHandLandmarks[0];
+            this.landmarks = hand;
+            const point = hand[CURSOR_LANDMARK];
+            this._raw.x = this._mapRange(1 - point.x, HAND_CLAMP_MIN, HAND_CLAMP_MAX, 0, 1);
+            this._raw.y = this._mapRange(point.y, HAND_CLAMP_MIN, HAND_CLAMP_MAX, 0, 1);
+            this.mode = "hand";
+            this.detected = true;
+          } else {
+            this.landmarks = null;
+          }
+        });
+        const camera = new W.Camera(this.video, {
+          onFrame: async () => {
+            await hands.send({ image: this.video });
+          },
+          width: 640,
+          height: 480
+        });
+        await camera.start();
+        this.mode = "hand";
+      }
+      _mapRange(value, inMin, inMax, outMin, outMax) {
+        const mapped = outMin + (value - inMin) / (inMax - inMin) * (outMax - outMin);
+        return Math.max(outMin, Math.min(outMax, mapped));
       }
     };
   }
@@ -866,7 +789,7 @@ function resizeFBO(gl, fbo, w, h) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
   gl.bindTexture(gl.TEXTURE_2D, null);
 }
-var FAR_Z, RING_COUNT, STREAK_COUNT, TUNNEL_RADIUS, SIDES, MAX_LINES, MAX_CIRCLES, RING_SEGMENTS, PARALLAX_STRENGTH, PALM_INDICES, HAND_SKELETON, COL, FLAT_VS, FLAT_FS, CIRCLE_VS, CIRCLE_FS, SCREEN_VS, BG_FS, GLOW_FS, EXTRACT_FS, BLUR_FS, FINAL_FS, Renderer;
+var FAR_Z, RING_COUNT, STREAK_COUNT, TUNNEL_RADIUS, SIDES, MAX_LINES, MAX_CIRCLES, RING_SEGMENTS, PARALLAX_STRENGTH, COL, HAND_CONNECTIONS, FLAT_VS, FLAT_FS, CIRCLE_VS, CIRCLE_FS, SCREEN_VS, BG_FS, GLOW_FS, EXTRACT_FS, BLUR_FS, FINAL_FS, Renderer;
 var init_renderer = __esm({
   "src/browser/renderer.ts"() {
     init_constants();
@@ -879,36 +802,6 @@ var init_renderer = __esm({
     MAX_CIRCLES = 600;
     RING_SEGMENTS = 24;
     PARALLAX_STRENGTH = 0.25;
-    PALM_INDICES = [0, 5, 9, 13, 17];
-    HAND_SKELETON = [
-      [0, 1],
-      [1, 2],
-      [2, 3],
-      [3, 4],
-      // thumb
-      [0, 5],
-      [5, 6],
-      [6, 7],
-      [7, 8],
-      // index
-      [5, 9],
-      [9, 10],
-      [10, 11],
-      [11, 12],
-      // middle
-      [9, 13],
-      [13, 14],
-      [14, 15],
-      [15, 16],
-      // ring
-      [13, 17],
-      [17, 18],
-      [18, 19],
-      [19, 20],
-      // pinky
-      [0, 17]
-      // palm edge
-    ];
     COL = {
       cursor: [0, 1, 1],
       // #0ff cyan
@@ -924,6 +817,35 @@ var init_renderer = __esm({
       // #f44
       white: [1, 1, 1]
     };
+    HAND_CONNECTIONS = [
+      [0, 1],
+      [1, 2],
+      [2, 3],
+      [3, 4],
+      // thumb
+      [0, 5],
+      [5, 6],
+      [6, 7],
+      [7, 8],
+      // index finger
+      [5, 9],
+      [9, 10],
+      [10, 11],
+      [11, 12],
+      // middle finger
+      [9, 13],
+      [13, 14],
+      [14, 15],
+      [15, 16],
+      // ring finger
+      [13, 17],
+      [17, 18],
+      [18, 19],
+      [19, 20],
+      // pinky
+      [0, 17]
+      // wrist to pinky base
+    ];
     FLAT_VS = `#version 300 es
 in vec2 a_pos;
 in vec4 a_color;
@@ -1050,12 +972,10 @@ void main() {
   vec2 q = v_uv * 2.0 - 1.0;
   float vig = 1.0 - dot(q, q) * u_vigStr;
   color *= max(vig, 0.0);
-  color *= 1.2;
-  color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 1.6));
   fragColor = vec4(color, 1.0);
 }`;
     Renderer = class {
-      constructor(glCanvas, hudCanvas, video) {
+      constructor(glCanvas, hudCanvas) {
         this.glCanvas = glCanvas;
         this.hudCanvas = hudCanvas;
         __publicField(this, "gl");
@@ -1099,13 +1019,12 @@ void main() {
         // Parallax camera offset — smoothly follows cursor for 3D effect
         __publicField(this, "camOffX", 0);
         __publicField(this, "camOffY", 0);
-        // Debug overlay state
-        __publicField(this, "_debugVisible", false);
-        __publicField(this, "_debugInfo", null);
-        __publicField(this, "_video");
         __publicField(this, "muteButtonRect", { x: 0, y: 0, w: 0, h: 0 });
-        __publicField(this, "buildTimestamp", "dev");
-        this._video = video;
+        __publicField(this, "camDebugButtonRect", { x: 0, y: 0, w: 0, h: 0 });
+        __publicField(this, "camDebugVisible", false);
+        __publicField(this, "_camOverlay", null);
+        __publicField(this, "_camDebugEl", null);
+        __publicField(this, "_camPreviewVideo", null);
         const gl = glCanvas.getContext("webgl2", { alpha: false, antialias: false, premultipliedAlpha: false });
         if (!gl) throw new Error("WebGL 2 not supported");
         this.gl = gl;
@@ -1392,12 +1311,11 @@ void main() {
       // =========================================================================
       // Main render
       // =========================================================================
-      render(game, cursor, musicMuted = false, debugInfo = null) {
+      render(game, cursor, musicMuted = false, landmarks = null, cursorLandmarkIdx = 8, clampMin = 0.25, clampMax = 0.75) {
         const gl = this.gl;
         const now = performance.now() / 1e3;
         const dt = this.lastRenderTime ? Math.min(now - this.lastRenderTime, 0.1) : 1 / 60;
         this.lastRenderTime = now;
-        this._debugInfo = debugInfo;
         let energy = 0.15, hue = 220;
         let drawTargets = false, drawProjectilesFlag = false, drawCursorFlag = false;
         let drawEffectsFlag = false, drawHUDFlag = false;
@@ -1466,7 +1384,7 @@ void main() {
         gl.uniform1i(gl.getUniformLocation(this.finalProg, "u_bloom"), 1);
         gl.uniform1f(gl.getUniformLocation(this.finalProg, "u_bloomStr"), 0.6 + energy * 0.8);
         gl.uniform1f(gl.getUniformLocation(this.finalProg, "u_scanStr"), 0.07);
-        gl.uniform1f(gl.getUniformLocation(this.finalProg, "u_vigStr"), 0.25);
+        gl.uniform1f(gl.getUniformLocation(this.finalProg, "u_vigStr"), 0.35);
         this.drawQuad(this.finalProg);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, null);
@@ -1485,17 +1403,15 @@ void main() {
         if (drawHUDFlag) {
           this.drawPlayingHUD(game, musicMuted, energy);
         }
-        if (this._debugVisible) {
-          this.drawDebugOverlay();
-        }
+        this.drawCamDebugOverlay(landmarks, cursorLandmarkIdx, clampMin, clampMax);
       }
       // =========================================================================
       // Scene: Background
       // =========================================================================
       drawBackground(energy, hue) {
         const gl = this.gl;
-        const [cr, cg, cb] = hsl(hue, 0.4, 0.09 + energy * 0.06);
-        const [er, eg, eb] = hsl(hue + 30, 0.25, 0.03 + energy * 0.03);
+        const [cr, cg, cb] = hsl(hue, 0.4, 0.06 + energy * 0.05);
+        const [er, eg, eb] = hsl(hue + 30, 0.25, 0.02 + energy * 0.02);
         gl.useProgram(this.bgProg);
         gl.uniform3f(gl.getUniformLocation(this.bgProg, "u_cCenter"), cr, cg, cb);
         gl.uniform3f(gl.getUniformLocation(this.bgProg, "u_cEdge"), er, eg, eb);
@@ -1774,7 +1690,6 @@ void main() {
       // =========================================================================
       // Scene: Cursor
       // =========================================================================
-      /** Draw cursor with layered glow. */
       drawCursorGL(cursor) {
         const cursorX = this.px(cursor.x);
         const cursorY = this.py(cursor.y);
@@ -1937,6 +1852,13 @@ void main() {
           ctx.lineTo(btnX + btnSize - 2, btnY + 2);
           ctx.stroke();
         }
+        const camBtnY = btnY + btnSize + 8;
+        this.camDebugButtonRect = { x: btnX, y: camBtnY, w: btnSize, h: btnSize };
+        ctx.fillStyle = this.camDebugVisible ? "#0ff" : "#555";
+        ctx.font = `${btnSize * 0.7}px 'Orbitron', sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("C", btnX + btnSize / 2, camBtnY + btnSize / 2);
         for (const effect of game.effects) {
           const prog = 1 - effect.life / effect.maxLife;
           const alpha = 1 - prog;
@@ -1981,162 +1903,17 @@ void main() {
       // HUD: Phase overlays
       // =========================================================================
       drawMenuHUD() {
-        const ctx = this.hud;
         const cx = this.w / 2;
         const cy = this.h / 2;
-        const s = (n) => this.ps(n);
-        this.glowText("OPAD", cx, cy - s(0.2), "#0ff", s(0.09), true, 30);
-        ctx.font = `${s(0.02)}px 'Orbitron', sans-serif`;
-        ctx.fillStyle = "#888";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("TUNNEL FLIGHT", cx, cy - s(0.12));
-        this.drawPhoneIllustration(cx, cy + s(0.02), s);
-        const instY = cy + s(0.21);
-        const lineH = s(0.026);
-        ctx.font = `${s(0.016)}px 'Orbitron', sans-serif`;
-        ctx.fillStyle = "#0ff";
-        ctx.textAlign = "center";
-        ctx.fillText("BEST ON MOBILE", cx, instY);
-        ctx.font = `${s(0.013)}px 'Orbitron', sans-serif`;
-        ctx.fillStyle = "#667";
-        ctx.fillText("Hold phone in LEFT hand  \u2022  Camera on the RIGHT", cx, instY + lineH);
-        ctx.fillText("Control with your RIGHT hand in front of camera", cx, instY + lineH * 2);
-        const pulse = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 600));
-        ctx.globalAlpha = pulse;
-        ctx.font = `${s(0.018)}px 'Orbitron', sans-serif`;
-        ctx.fillStyle = "#0ff";
-        ctx.fillText("TAP TO START", cx, this.h - s(0.1));
-        ctx.globalAlpha = 1;
-        ctx.font = `${s(0.01)}px 'Orbitron', sans-serif`;
-        ctx.fillStyle = "#445";
-        ctx.textAlign = "center";
-        ctx.fillText(`Grzegorz Gajos  \u2022  ggajos.com  \u2022  build ${this.buildTimestamp}`, cx, this.h - s(0.03));
-      }
-      /** Draw a simple schematic: phone held in left hand, right hand waving at camera. */
-      drawPhoneIllustration(cx, cy, s) {
-        const ctx = this.hud;
-        const handX = cx - s(0.13);
-        const handY = cy;
-        const fR = s(0.012);
-        ctx.save();
-        ctx.strokeStyle = "#446";
-        ctx.lineWidth = 2;
-        ctx.lineJoin = "round";
-        ctx.beginPath();
-        ctx.ellipse(handX - s(5e-3), handY - s(0.05), fR * 0.8, fR * 1.6, -0.3, 0, Math.PI * 2);
-        ctx.stroke();
-        for (let i = 0; i < 4; i++) {
-          const fy = handY + s(0.04) + i * fR * 1.6;
-          ctx.beginPath();
-          ctx.ellipse(handX + s(0.01), fy, fR * 1.8, fR * 0.7, 0, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-        ctx.restore();
-        const pw = s(0.22);
-        const ph = s(0.13);
-        const px = cx - pw / 2;
-        const py = cy - ph / 2;
-        const cornerR = s(0.012);
-        ctx.save();
-        ctx.strokeStyle = "#556";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.roundRect(px, py, pw, ph, cornerR);
-        ctx.stroke();
-        const inset = s(6e-3);
-        ctx.strokeStyle = "#334";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.roundRect(px + inset, py + inset, pw - inset * 2, ph - inset * 2, cornerR * 0.5);
-        ctx.stroke();
-        const camR = s(7e-3);
-        const camX = px + pw - s(0.018);
-        const camY = py + s(0.02);
-        ctx.beginPath();
-        ctx.arc(camX, camY, camR, 0, Math.PI * 2);
-        ctx.strokeStyle = "#0ff";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.font = `${s(8e-3)}px 'Orbitron', sans-serif`;
-        ctx.fillStyle = "#0aa";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "top";
-        ctx.fillText("CAM", camX, camY + camR + 2);
-        ctx.fillStyle = "rgba(0, 255, 255, 0.06)";
-        ctx.fillRect(px + inset, py + inset, pw - inset * 2, ph - inset * 2);
-        const scrCx = px + pw / 2 - s(0.01);
-        const scrCy = py + ph / 2;
-        ctx.strokeStyle = "rgba(0, 255, 255, 0.2)";
-        ctx.lineWidth = 1;
-        for (let a = 0; a < Math.PI * 2; a += Math.PI / 4) {
-          ctx.beginPath();
-          ctx.moveTo(scrCx + Math.cos(a) * s(0.01), scrCy + Math.sin(a) * s(8e-3));
-          ctx.lineTo(scrCx + Math.cos(a) * s(0.06), scrCy + Math.sin(a) * s(0.05));
-          ctx.stroke();
-        }
-        ctx.restore();
-        const rhX = cx + s(0.18);
-        const rhY = cy - s(0.01);
-        this.drawOpenHand(rhX, rhY, s);
-        ctx.save();
-        ctx.strokeStyle = "rgba(0, 255, 255, 0.3)";
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 4]);
-        const arrowStartX = rhX - s(0.04);
-        const arrowEndX = camX + s(0.025);
-        ctx.beginPath();
-        ctx.moveTo(arrowStartX, rhY);
-        ctx.quadraticCurveTo((arrowStartX + arrowEndX) / 2, rhY - s(0.04), arrowEndX, camY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-      }
-      /** Draw a simple open right hand silhouette. */
-      drawOpenHand(cx, cy, s) {
-        const ctx = this.hud;
-        ctx.save();
-        ctx.strokeStyle = "#0cc";
-        ctx.fillStyle = "rgba(0, 204, 204, 0.08)";
-        ctx.lineWidth = 1.5;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        const palmW = s(0.022);
-        const palmH = s(0.028);
-        ctx.beginPath();
-        ctx.ellipse(cx, cy + s(0.01), palmW, palmH, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        const fingers = [
-          { angle: -1.4, len: s(0.032) },
-          // thumb (angled out)
-          { angle: -0.5, len: s(0.038) },
-          // index
-          { angle: -0.2, len: s(0.04) },
-          // middle
-          { angle: 0.1, len: s(0.037) },
-          // ring
-          { angle: 0.4, len: s(0.03) }
-          // pinky
-        ];
-        for (const f of fingers) {
-          const baseX = cx + Math.sin(f.angle) * palmW * 0.7;
-          const baseY = cy + s(0.01) - palmH * 0.6;
-          ctx.beginPath();
-          ctx.moveTo(baseX, baseY);
-          ctx.lineTo(
-            baseX + Math.sin(f.angle) * f.len * 0.3,
-            baseY - f.len
-          );
-          ctx.stroke();
-        }
-        ctx.beginPath();
-        ctx.moveTo(cx - palmW * 0.5, cy + palmH + s(5e-3));
-        ctx.lineTo(cx - palmW * 0.3, cy + palmH + s(0.025));
-        ctx.moveTo(cx + palmW * 0.5, cy + palmH + s(5e-3));
-        ctx.lineTo(cx + palmW * 0.3, cy + palmH + s(0.025));
-        ctx.stroke();
-        ctx.restore();
+        this.glowText("OPAD", cx, cy - this.ps(0.08), "#0ff", this.ps(0.08), true, 30);
+        this.hud.font = `${this.ps(0.02)}px 'Orbitron', sans-serif`;
+        this.hud.fillStyle = "#888";
+        this.hud.textAlign = "center";
+        this.hud.textBaseline = "middle";
+        this.hud.fillText("TUNNEL FLIGHT", cx, cy);
+        this.hud.font = `${this.ps(0.016)}px 'Orbitron', sans-serif`;
+        this.hud.fillStyle = "#555";
+        this.hud.fillText("TAP TO START", cx, cy + this.ps(0.08));
       }
       drawCountdownHUD(game) {
         const count = Math.max(1, Math.ceil(game.countdownValue));
@@ -2208,148 +1985,105 @@ void main() {
         ctx.fillText("TAP TO RETRY", cx, cy + lineH * 5);
       }
       // =========================================================================
-      // Debug overlay (toggled with D key)
+      // Camera debug overlay
       // =========================================================================
-      /** Toggle the debug hand tracking overlay. */
-      toggleDebug() {
-        this._debugVisible = !this._debugVisible;
+      /** Initialize references to the camera debug DOM elements. */
+      initCamDebug(debugEl, overlayCanvas, previewVideo) {
+        this._camDebugEl = debugEl;
+        this._camPreviewVideo = previewVideo;
+        const ctx = overlayCanvas.getContext("2d");
+        if (ctx) this._camOverlay = ctx;
       }
-      /** Draw debug overlay: small camera feed, hand skeleton, and calibration hints. */
-      drawDebugOverlay() {
-        const ctx = this.hud;
-        const info = this._debugInfo;
-        const pad = this.ps(0.01);
-        const fontSize = this.ps(0.012);
-        const lineH = fontSize * 1.5;
-        const panelW = Math.max(this.ps(0.25), 180);
-        const videoH = panelW * (9 / 16);
-        const textAreaH = lineH * 4 + pad * 2;
-        const panelH = videoH + textAreaH;
-        const panelX = pad;
-        const panelY = this.h - pad - panelH;
+      /** Toggle camera debug visibility and sync video stream. */
+      toggleCamDebug(sourceVideo) {
+        this.camDebugVisible = !this.camDebugVisible;
+        if (!this._camDebugEl) return;
+        this._camDebugEl.style.display = this.camDebugVisible ? "block" : "none";
+        if (this.camDebugVisible && this._camPreviewVideo && sourceVideo.srcObject) {
+          this._camPreviewVideo.srcObject = sourceVideo.srcObject;
+        }
+      }
+      /** Draw hand landmarks on the camera debug overlay canvas. */
+      drawCamDebugOverlay(landmarks, cursorIdx, clampMin, clampMax) {
+        if (!this._camOverlay || !this._camDebugEl) return;
+        if (!this.camDebugVisible) return;
+        const canvas = this._camOverlay.canvas;
+        const rect = this._camDebugEl.getBoundingClientRect();
+        if (canvas.width !== rect.width || canvas.height !== rect.height) {
+          canvas.width = rect.width;
+          canvas.height = rect.height;
+        }
+        const ctx = this._camOverlay;
+        const cw = canvas.width;
+        const ch = canvas.height;
+        ctx.clearRect(0, 0, cw, ch);
         ctx.save();
-        ctx.globalAlpha = 0.85;
-        ctx.fillStyle = "#0a0a14";
-        ctx.fillRect(panelX, panelY, panelW, panelH);
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = "#334";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(panelX, panelY, panelW, panelH);
-        const vidX = panelX;
-        const vidY = panelY;
-        try {
-          if (this._video && this._video.readyState >= 2) {
-            ctx.save();
-            ctx.translate(vidX + panelW, vidY);
-            ctx.scale(-1, 1);
-            ctx.drawImage(this._video, 0, 0, panelW, videoH);
-            ctx.restore();
-          } else {
-            ctx.fillStyle = "#111";
-            ctx.fillRect(vidX, vidY, panelW, videoH);
-            ctx.fillStyle = "#444";
-            ctx.font = `${fontSize}px 'Orbitron', sans-serif`;
-            ctx.textAlign = "center";
-            ctx.textBaseline = "middle";
-            ctx.fillText("NO CAMERA", vidX + panelW / 2, vidY + videoH / 2);
-          }
-        } catch {
-        }
-        ctx.strokeStyle = "rgba(0, 255, 0, 0.25)";
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.strokeRect(
-          vidX + 0.15 * panelW,
-          vidY + 0.15 * videoH,
-          0.7 * panelW,
-          0.7 * videoH
-        );
+        ctx.translate(cw, 0);
+        ctx.scale(-1, 1);
+        const clampX = clampMin * cw;
+        const clampY = clampMin * ch;
+        const clampW = (clampMax - clampMin) * cw;
+        const clampH = (clampMax - clampMin) * ch;
+        ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+        ctx.fillRect(0, 0, cw, clampY);
+        ctx.fillRect(0, clampY + clampH, cw, ch - clampY - clampH);
+        ctx.fillRect(0, clampY, clampX, clampH);
+        ctx.fillRect(clampX + clampW, clampY, cw - clampX - clampW, clampH);
+        ctx.strokeStyle = "rgba(255, 255, 0, 0.6)";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(clampX, clampY, clampW, clampH);
         ctx.setLineDash([]);
-        if (info && info.landmarks) {
-          const lm = info.landmarks;
-          ctx.strokeStyle = "#0ff";
-          ctx.lineWidth = 1.5;
-          ctx.globalAlpha = 0.7;
-          for (const [a, b] of HAND_SKELETON) {
-            const ax = vidX + (1 - lm[a].x) * panelW;
-            const ay = vidY + lm[a].y * videoH;
-            const bx = vidX + (1 - lm[b].x) * panelW;
-            const by = vidY + lm[b].y * videoH;
-            ctx.beginPath();
-            ctx.moveTo(ax, ay);
-            ctx.lineTo(bx, by);
-            ctx.stroke();
-          }
-          ctx.globalAlpha = 1;
-          const dotR = 2;
-          for (let i = 0; i < lm.length; i++) {
-            const lx = vidX + (1 - lm[i].x) * panelW;
-            const ly = vidY + lm[i].y * videoH;
-            ctx.beginPath();
-            ctx.arc(lx, ly, dotR, 0, Math.PI * 2);
-            ctx.fillStyle = PALM_INDICES.includes(i) ? "#ff0" : "#0ff";
-            ctx.fill();
-          }
-          let sumX = 0, sumY = 0;
-          for (const idx of PALM_INDICES) {
-            sumX += lm[idx].x;
-            sumY += lm[idx].y;
-          }
-          const centX = vidX + (1 - sumX / PALM_INDICES.length) * panelW;
-          const centY = vidY + sumY / PALM_INDICES.length * videoH;
-          ctx.beginPath();
-          ctx.arc(centX, centY, 5, 0, Math.PI * 2);
-          ctx.fillStyle = "#f0f";
-          ctx.fill();
-          ctx.strokeStyle = "#fff";
-          ctx.lineWidth = 1;
-          ctx.stroke();
-        }
-        let textY = vidY + videoH + pad;
+        ctx.fillStyle = "rgba(255, 255, 0, 0.7)";
+        ctx.font = "8px 'Orbitron', sans-serif";
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
-        ctx.font = `${fontSize}px 'Orbitron', sans-serif`;
-        const mode = info ? info.inputMode : "none";
-        const confStr = info && info.detected ? `${Math.round(info.confidence * 100)}%` : "--";
-        ctx.fillStyle = "#888";
-        ctx.fillText(`Mode: ${mode}  Conf: ${confStr}`, panelX + pad, textY);
-        textY += lineH;
-        if (info && info.landmarks) {
-          const hint = this._getDistanceHint(info.landmarks);
-          ctx.fillStyle = hint.color;
-          ctx.fillText(`Distance: ${hint.label}`, panelX + pad, textY);
-        } else {
-          ctx.fillStyle = "#555";
-          ctx.fillText("Show hand to camera", panelX + pad, textY);
-        }
-        textY += lineH;
-        if (info) {
-          ctx.fillStyle = "#666";
-          ctx.fillText(
-            `Pos: (${info.cursorSmoothed.x.toFixed(3)}, ${info.cursorSmoothed.y.toFixed(3)})`,
-            panelX + pad,
-            textY
-          );
-        }
-        textY += lineH;
-        ctx.fillStyle = "#444";
-        ctx.fillText("Press D to close", panelX + pad, textY);
+        ctx.fillText("CLAMP", clampX + 3, clampY + 2);
         ctx.restore();
-      }
-      /** Evaluate hand distance from camera based on landmark spread. */
-      _getDistanceHint(landmarks) {
-        const wrist = landmarks[0];
-        const midMcp = landmarks[9];
-        const dx = wrist.x - midMcp.x;
-        const dy = wrist.y - midMcp.y;
-        const span = Math.sqrt(dx * dx + dy * dy);
-        if (span < 0.06) {
-          return { label: "TOO FAR -- move closer", color: "#f44" };
-        } else if (span > 0.18) {
-          return { label: "TOO CLOSE -- move back", color: "#ff0" };
-        } else {
-          return { label: "GOOD", color: "#0f0" };
+        if (!landmarks || landmarks.length < 21) return;
+        ctx.save();
+        ctx.translate(cw, 0);
+        ctx.scale(-1, 1);
+        ctx.strokeStyle = "rgba(0, 255, 255, 0.5)";
+        ctx.lineWidth = 1.5;
+        for (const [a, b] of HAND_CONNECTIONS) {
+          const la = landmarks[a];
+          const lb = landmarks[b];
+          ctx.beginPath();
+          ctx.moveTo(la.x * cw, la.y * ch);
+          ctx.lineTo(lb.x * cw, lb.y * ch);
+          ctx.stroke();
         }
+        for (let i = 0; i < landmarks.length; i++) {
+          const lm = landmarks[i];
+          const px = lm.x * cw;
+          const py = lm.y * ch;
+          if (i === cursorIdx) continue;
+          ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+          ctx.beginPath();
+          ctx.arc(px, py, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        const active = landmarks[cursorIdx];
+        if (active) {
+          const ax = active.x * cw;
+          const ay = active.y * ch;
+          ctx.strokeStyle = "#0ff";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(ax, ay, 10, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = "#0ff";
+          ctx.beginPath();
+          ctx.arc(ax, ay, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#0ff";
+          ctx.font = "10px 'Orbitron', sans-serif";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          ctx.fillText("CURSOR", ax + 14, ay - 2);
+        }
+        ctx.restore();
       }
     };
   }
@@ -2404,26 +2138,16 @@ var require_main = __commonJS({
     };
     var BEATMAP_URL = "media/ep4.beatmap.json";
     var MUSIC_URL = "media/ep4.mp3";
-    function requestFullscreenLandscape() {
-      const doc = document.documentElement;
-      if (!document.fullscreenElement) {
-        const p = doc.requestFullscreen?.() ?? doc.webkitRequestFullscreen?.();
-        if (p instanceof Promise) {
-          p.then(() => {
-            screen.orientation?.lock?.("landscape").catch(() => {
-            });
-          }).catch(() => {
-          });
-        }
-      }
-    }
     var canvas = document.getElementById("game");
     var hudCanvas = document.getElementById("hud");
     var video = document.getElementById("cam");
+    var camDebugEl = document.getElementById("cam-debug");
+    var camOverlay = document.getElementById("cam-overlay");
+    var camPreview = document.getElementById("cam-preview");
     var audio = new AudioManager();
-    var input = new InputManager(canvas);
-    var renderer = new Renderer(canvas, hudCanvas, video);
-    renderer.buildTimestamp = true ? "2026-02-27 17:14" : "dev";
+    var input = new InputManager(canvas, video);
+    var renderer = new Renderer(canvas, hudCanvas);
+    renderer.initCamDebug(camDebugEl, camOverlay, camPreview);
     var loadedBeatmap = null;
     var game = new Game(generateBeatmap());
     var musicMode = false;
@@ -2444,7 +2168,15 @@ var require_main = __commonJS({
         audio.stopMusic();
         musicStarted = false;
       }
-      renderer.render(game, input.cursor, audio.musicMuted, input.debugInfo);
+      renderer.render(
+        game,
+        input.cursor,
+        audio.musicMuted,
+        input.landmarks,
+        input.cursorLandmarkIndex,
+        input.clampMin,
+        input.clampMax
+      );
       requestAnimationFrame(loop);
     }
     async function loadBeatmapAndMusic() {
@@ -2462,7 +2194,6 @@ var require_main = __commonJS({
     }
     async function handleStart() {
       await audio.init();
-      input.recenter();
       if (loadedBeatmap) {
         game = new Game(loadedBeatmap);
         musicMode = true;
@@ -2479,10 +2210,18 @@ var require_main = __commonJS({
       const margin = 10;
       return clientX >= r.x - margin && clientX <= r.x + r.w + margin && clientY >= r.y - margin && clientY <= r.y + r.h + margin;
     }
+    function hitTestCamDebugButton(clientX, clientY) {
+      const r = renderer.camDebugButtonRect;
+      const margin = 10;
+      return clientX >= r.x - margin && clientX <= r.x + r.w + margin && clientY >= r.y - margin && clientY <= r.y + r.h + margin;
+    }
     function handleClick(e) {
-      requestFullscreenLandscape();
       if (game.phase === "playing" && hitTestMuteButton(e.clientX, e.clientY)) {
         audio.toggleMusicMute();
+        return;
+      }
+      if (game.phase === "playing" && hitTestCamDebugButton(e.clientX, e.clientY)) {
+        renderer.toggleCamDebug(video);
         return;
       }
       if (game.phase === "menu" || game.phase === "results" || game.phase === "gameover") {
@@ -2531,11 +2270,6 @@ var require_main = __commonJS({
         renderer.render(game, { x: cursorX, y: cursorY });
       }
     };
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "d" || e.key === "D") {
-        renderer.toggleDebug();
-      }
-    });
     requestAnimationFrame(loop);
   }
 });
