@@ -596,19 +596,21 @@ var init_audio = __esm({
 });
 
 // src/browser/input.ts
-var PALM_LANDMARKS, InputManager;
+function clamp2(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+var GYRO_RANGE_DEG, InputManager;
 var init_input = __esm({
   "src/browser/input.ts"() {
-    PALM_LANDMARKS = [0, 5, 9, 13, 17];
+    GYRO_RANGE_DEG = 30;
     InputManager = class {
-      constructor(canvas, video) {
-        this.canvas = canvas;
-        this.video = video;
+      constructor(_canvas) {
+        this._canvas = _canvas;
         /** Smoothed cursor position in game coordinates [0,1]. */
         __publicField(this, "cursor", { x: 0.5, y: 0.5 });
         __publicField(this, "mode", "none");
         __publicField(this, "detected", false);
-        /** Debug information for the hand tracking overlay. */
+        /** Debug information for the overlay. */
         __publicField(this, "debugInfo", {
           detected: false,
           confidence: 0,
@@ -618,106 +620,92 @@ var init_input = __esm({
           inputMode: "none"
         });
         __publicField(this, "_rawCursor", { x: 0.5, y: 0.5 });
-        __publicField(this, "_prevRaw", { x: 0.5, y: 0.5 });
-        __publicField(this, "_velocity", { x: 0, y: 0 });
-        __publicField(this, "_lastResultTime", 0);
-        __publicField(this, "_smoothingSpeed", 28);
-        __publicField(this, "_predictionMs", 35);
-        __publicField(this, "_confidence", 0);
-        __publicField(this, "_landmarks", null);
+        __publicField(this, "_smoothingSpeed", 20);
+        // Gyro state
+        __publicField(this, "_hasGyro", false);
+        __publicField(this, "_refBeta", null);
+        __publicField(this, "_refGamma", null);
+        __publicField(this, "_curBeta", 0);
+        __publicField(this, "_curGamma", 0);
+      }
+      /** Request gyro permission (must be called from a user gesture on iOS). */
+      async requestGyroPermission() {
+        const DOE = DeviceOrientationEvent;
+        if (typeof DOE.requestPermission === "function") {
+          try {
+            const result = await DOE.requestPermission();
+            return result === "granted";
+          } catch {
+            return false;
+          }
+        }
+        return true;
       }
       async init() {
-        try {
-          await this._initHandTracking();
-          return "hand";
-        } catch (e) {
-          console.warn(
-            "Hand tracking unavailable, using mouse/touch:",
-            e.message
-          );
-          return this.mode === "none" ? "mouse" : this.mode;
+        if (window.DeviceOrientationEvent) {
+          const permitted = await this.requestGyroPermission();
+          if (permitted) {
+            this._initGyro();
+            await new Promise((resolve) => setTimeout(resolve, 200));
+            if (this._hasGyro) {
+              this.mode = "gyro";
+              return "gyro";
+            }
+          }
         }
+        this._initMouse();
+        this.mode = "mouse";
+        return "mouse";
       }
       update(dt) {
-        const factor = 1 - Math.exp(-this._smoothingSpeed * dt);
-        if (this._landmarks) {
-          const predSec = this._predictionMs / 1e3;
-          const targetX = Math.max(0, Math.min(1, this._rawCursor.x + this._velocity.x * predSec));
-          const targetY = Math.max(0, Math.min(1, this._rawCursor.y + this._velocity.y * predSec));
-          this.cursor.x += (targetX - this.cursor.x) * factor;
-          this.cursor.y += (targetY - this.cursor.y) * factor;
+        if (this.mode === "gyro" && this._hasGyro) {
+          this._updateGyro();
         }
+        const factor = 1 - Math.exp(-this._smoothingSpeed * dt);
+        this.cursor.x += (this._rawCursor.x - this.cursor.x) * factor;
+        this.cursor.y += (this._rawCursor.y - this.cursor.y) * factor;
         this.debugInfo = {
-          detected: this._landmarks !== null,
-          confidence: this._confidence,
-          landmarks: this._landmarks,
+          detected: this.mode !== "none",
+          confidence: this.mode === "gyro" ? 1 : 0,
+          landmarks: null,
           cursorRaw: { x: this._rawCursor.x, y: this._rawCursor.y },
           cursorSmoothed: { x: this.cursor.x, y: this.cursor.y },
           inputMode: this.mode
         };
       }
-      async _initHandTracking() {
-        const W = window;
-        if (!W.Hands || !W.Camera) {
-          throw new Error("MediaPipe not loaded");
-        }
-        const hands = new W.Hands({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-        });
-        hands.setOptions({
-          maxNumHands: 1,
-          modelComplexity: 1,
-          minDetectionConfidence: 0.7,
-          minTrackingConfidence: 0.6
-        });
-        hands.onResults((results) => {
-          if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            const landmarks = results.multiHandLandmarks[0];
-            this._landmarks = landmarks;
-            this._confidence = results.multiHandedness?.[0]?.score ?? 0;
-            let sumX = 0, sumY = 0;
-            for (const idx of PALM_LANDMARKS) {
-              sumX += landmarks[idx].x;
-              sumY += landmarks[idx].y;
-            }
-            const avgX = sumX / PALM_LANDMARKS.length;
-            const avgY = sumY / PALM_LANDMARKS.length;
-            const newX = this._mapRange(1 - avgX, 0.15, 0.85, 0, 1);
-            const newY = this._mapRange(avgY, 0.15, 0.85, 0, 1);
-            const now = performance.now();
-            const elapsed = (now - this._lastResultTime) / 1e3;
-            if (this._lastResultTime > 0 && elapsed > 0 && elapsed < 0.2) {
-              this._velocity.x = (newX - this._prevRaw.x) / elapsed;
-              this._velocity.y = (newY - this._prevRaw.y) / elapsed;
-            } else {
-              this._velocity.x = 0;
-              this._velocity.y = 0;
-            }
-            this._prevRaw.x = this._rawCursor.x;
-            this._prevRaw.y = this._rawCursor.y;
-            this._rawCursor.x = newX;
-            this._rawCursor.y = newY;
-            this._lastResultTime = now;
-            this.mode = "hand";
-            this.detected = true;
-          } else {
-            this._landmarks = null;
-            this._confidence = 0;
+      /** Reset the gyro reference to the current phone orientation. */
+      recenter() {
+        this._refBeta = this._curBeta;
+        this._refGamma = this._curGamma;
+      }
+      // ---- Gyro input ----
+      _initGyro() {
+        window.addEventListener("deviceorientation", (e) => {
+          if (e.beta === null || e.gamma === null) return;
+          this._hasGyro = true;
+          this._curBeta = e.beta;
+          this._curGamma = e.gamma;
+          if (this._refBeta === null) {
+            this._refBeta = e.beta;
+            this._refGamma = e.gamma;
           }
         });
-        const camera = new W.Camera(this.video, {
-          onFrame: async () => {
-            await hands.send({ image: this.video });
-          },
-          width: 640,
-          height: 480
-        });
-        await camera.start();
-        this.mode = "hand";
       }
-      _mapRange(value, inMin, inMax, outMin, outMax) {
-        const mapped = outMin + (value - inMin) / (inMax - inMin) * (outMax - outMin);
-        return Math.max(outMin, Math.min(outMax, mapped));
+      _updateGyro() {
+        if (this._refBeta === null || this._refGamma === null) return;
+        const dGamma = this._curGamma - this._refGamma;
+        const dBeta = this._curBeta - this._refBeta;
+        this._rawCursor.x = clamp2(0.5 + dGamma / (GYRO_RANGE_DEG * 2), 0, 1);
+        this._rawCursor.y = clamp2(0.5 + dBeta / (GYRO_RANGE_DEG * 2), 0, 1);
+      }
+      // ---- Mouse input (desktop fallback) ----
+      _initMouse() {
+        this._canvas.addEventListener("mousemove", (e) => {
+          const rect = this._canvas.getBoundingClientRect();
+          this._rawCursor.x = clamp2((e.clientX - rect.left) / rect.width, 0, 1);
+          this._rawCursor.y = clamp2((e.clientY - rect.top) / rect.height, 0, 1);
+          this.detected = true;
+        });
       }
     };
   }
@@ -2351,7 +2339,7 @@ var require_main = __commonJS({
     var hudCanvas = document.getElementById("hud");
     var video = document.getElementById("cam");
     var audio = new AudioManager();
-    var input = new InputManager(canvas, video);
+    var input = new InputManager(canvas);
     var renderer = new Renderer(canvas, hudCanvas, video);
     var loadedBeatmap = null;
     var game = new Game(generateBeatmap());
@@ -2391,6 +2379,7 @@ var require_main = __commonJS({
     }
     async function handleStart() {
       await audio.init();
+      input.recenter();
       if (loadedBeatmap) {
         game = new Game(loadedBeatmap);
         musicMode = true;
