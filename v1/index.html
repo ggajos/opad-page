@@ -59,7 +59,7 @@
       font-size: 1rem;
       opacity: 0.8;
     }
-    @media (orientation: landscape) and (max-height: 500px) {
+    @media (orientation: portrait) and (max-width: 500px) {
       #rotate-warning { display: flex; }
     }
   </style>
@@ -72,7 +72,7 @@
   <!-- Landscape warning (CSS-driven, only visible on small landscape screens) -->
   <div id="rotate-warning">
     <div class="icon">&#x21BB;</div>
-    <div class="msg">Please rotate your device to portrait mode</div>
+    <div class="msg">Please rotate your device to landscape mode</div>
   </div>
 
   <!-- MediaPipe Hands (loaded before bundle so globals are available) -->
