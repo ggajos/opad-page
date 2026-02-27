@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>OPAD</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet" />
@@ -33,12 +37,43 @@
       opacity: 0;
       pointer-events: none;
     }
+    /* Landscape warning overlay — shown only on mobile-sized screens in landscape */
+    #rotate-warning {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: #08080f;
+      color: #0ff;
+      font-family: "Orbitron", sans-serif;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      gap: 1rem;
+    }
+    #rotate-warning .icon {
+      font-size: 3rem;
+    }
+    #rotate-warning .msg {
+      font-size: 1rem;
+      opacity: 0.8;
+    }
+    @media (orientation: landscape) and (max-height: 500px) {
+      #rotate-warning { display: flex; }
+    }
   </style>
 </head>
 <body>
   <canvas id="game"></canvas>
   <canvas id="hud"></canvas>
   <video id="cam" autoplay playsinline></video>
+
+  <!-- Landscape warning (CSS-driven, only visible on small landscape screens) -->
+  <div id="rotate-warning">
+    <div class="icon">&#x21BB;</div>
+    <div class="msg">Please rotate your device to portrait mode</div>
+  </div>
 
   <!-- MediaPipe Hands (loaded before bundle so globals are available) -->
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js" crossorigin="anonymous"></script>

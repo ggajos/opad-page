@@ -2204,6 +2204,19 @@ var require_main = __commonJS({
     };
     var BEATMAP_URL = "media/ep4.beatmap.json";
     var MUSIC_URL = "media/ep4.mp3";
+    function requestFullscreenPortrait() {
+      const doc = document.documentElement;
+      if (!document.fullscreenElement) {
+        const p = doc.requestFullscreen?.() ?? doc.webkitRequestFullscreen?.();
+        if (p instanceof Promise) {
+          p.then(() => {
+            screen.orientation?.lock?.("portrait-primary").catch(() => {
+            });
+          }).catch(() => {
+          });
+        }
+      }
+    }
     var canvas = document.getElementById("game");
     var hudCanvas = document.getElementById("hud");
     var video = document.getElementById("cam");
@@ -2248,6 +2261,7 @@ var require_main = __commonJS({
     }
     async function handleStart() {
       await audio.init();
+      requestFullscreenPortrait();
       if (loadedBeatmap) {
         game = new Game(loadedBeatmap);
         musicMode = true;
