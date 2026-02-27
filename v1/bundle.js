@@ -2313,7 +2313,7 @@ var require_main = __commonJS({
     };
     var BEATMAP_URL = "media/ep4.beatmap.json";
     var MUSIC_URL = "media/ep4.mp3";
-    function requestFullscreenPortrait() {
+    function requestFullscreenLandscape() {
       const doc = document.documentElement;
       if (!document.fullscreenElement) {
         const p = doc.requestFullscreen?.() ?? doc.webkitRequestFullscreen?.();
@@ -2370,7 +2370,6 @@ var require_main = __commonJS({
     }
     async function handleStart() {
       await audio.init();
-      requestFullscreenPortrait();
       if (loadedBeatmap) {
         game = new Game(loadedBeatmap);
         musicMode = true;
@@ -2388,6 +2387,7 @@ var require_main = __commonJS({
       return clientX >= r.x - margin && clientX <= r.x + r.w + margin && clientY >= r.y - margin && clientY <= r.y + r.h + margin;
     }
     function handleClick(e) {
+      requestFullscreenLandscape();
       if (game.phase === "playing" && hitTestMuteButton(e.clientX, e.clientY)) {
         audio.toggleMusicMute();
         return;
