@@ -10,32 +10,40 @@ var __commonJS = (cb, mod) => function __require() {
 var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 
 // src/game/constants.ts
-var APPROACH_TIME, PERFECT_WINDOW, GOOD_WINDOW, HIT_RADIUS, CURSOR_RADIUS, PROJECTILE_RADIUS, PERFECT_SCORE, GOOD_SCORE, COMBO_MILESTONE, MAX_MULTIPLIER, MAX_HEALTH, MISS_DAMAGE, PROJECTILE_DAMAGE, PERFECT_HEAL, HIT_EFFECT_DURATION, MISS_EFFECT_DURATION, DAMAGE_EFFECT_DURATION, COMBO_EFFECT_DURATION, COUNTDOWN_SECONDS;
+var APPROACH_TIME_MAX, APPROACH_TIME_MIN, PERFECT_WINDOW, GOOD_WINDOW, LANE_COUNT, LANE_HIT_Y, LANE_CENTERS, FINGER_SPEED_THRESHOLD, PERFECT_SCORE, GOOD_SCORE, COMBO_MILESTONE, MAX_MULTIPLIER, MAX_HEALTH, MISS_DAMAGE, PERFECT_HEAL, POWER_SLOW_TIME_COMBO, POWER_SHIELD_COMBO, POWER_SCORE_BOOST_COMBO, POWER_DURATION, SCORE_BOOST_MULTIPLIER, HIT_EFFECT_DURATION, MISS_EFFECT_DURATION, COMBO_EFFECT_DURATION, COUNTDOWN_SECONDS;
 var init_constants = __esm({
   "src/game/constants.ts"() {
-    APPROACH_TIME = 1.2;
+    APPROACH_TIME_MAX = 2.5;
+    APPROACH_TIME_MIN = 0.8;
     PERFECT_WINDOW = 0.1;
     GOOD_WINDOW = 0.25;
-    HIT_RADIUS = 0.08;
-    CURSOR_RADIUS = 0.03;
-    PROJECTILE_RADIUS = 0.02;
+    LANE_COUNT = 4;
+    LANE_HIT_Y = 0.82;
+    LANE_CENTERS = [0.2, 0.4, 0.6, 0.8];
+    FINGER_SPEED_THRESHOLD = 0.8;
     PERFECT_SCORE = 300;
     GOOD_SCORE = 100;
     COMBO_MILESTONE = 10;
     MAX_MULTIPLIER = 8;
     MAX_HEALTH = 100;
     MISS_DAMAGE = 3;
-    PROJECTILE_DAMAGE = 8;
     PERFECT_HEAL = 1;
+    POWER_SLOW_TIME_COMBO = 10;
+    POWER_SHIELD_COMBO = 20;
+    POWER_SCORE_BOOST_COMBO = 30;
+    POWER_DURATION = 5;
+    SCORE_BOOST_MULTIPLIER = 2;
     HIT_EFFECT_DURATION = 0.6;
     MISS_EFFECT_DURATION = 0.5;
-    DAMAGE_EFFECT_DURATION = 0.4;
     COMBO_EFFECT_DURATION = 0.8;
     COUNTDOWN_SECONDS = 3;
   }
 });
 
 // src/game/game.ts
+function laneCenterX(lane) {
+  return LANE_CENTERS[lane] ?? 0.5;
+}
 var Game;
 var init_game = __esm({
   "src/game/game.ts"() {
@@ -49,12 +57,13 @@ var init_game = __esm({
         __publicField(this, "combo", 0);
         __publicField(this, "maxCombo", 0);
         __publicField(this, "health", MAX_HEALTH);
-        __publicField(this, "targets", []);
-        __publicField(this, "projectiles", []);
+        __publicField(this, "slashes", []);
         __publicField(this, "effects", []);
         __publicField(this, "nextEvent", 0);
         __publicField(this, "hits", { perfect: 0, good: 0, miss: 0 });
         __publicField(this, "countdownValue", COUNTDOWN_SECONDS);
+        __publicField(this, "power", "none");
+        __publicField(this, "powerTimeLeft", 0);
         __publicField(this, "_countdownStart", 0);
         __publicField(this, "_playStart", 0);
         __publicField(this, "_lastComboMilestone", 0);
@@ -67,8 +76,7 @@ var init_game = __esm({
         this.combo = 0;
         this.maxCombo = 0;
         this.health = MAX_HEALTH;
-        this.targets = [];
-        this.projectiles = [];
+        this.slashes = [];
         this.effects = [];
         this.nextEvent = 0;
         this.hits = { perfect: 0, good: 0, miss: 0 };
@@ -76,18 +84,21 @@ var init_game = __esm({
         this._countdownStart = now;
         this._playStart = 0;
         this._lastComboMilestone = 0;
+        this.power = "none";
+        this.powerTimeLeft = 0;
       }
-      update(now, dt, cursor, audio) {
+      update(now, dt, gesture, audio) {
         if (this.phase === "countdown") {
           this._updateCountdown(now);
           return;
         }
         if (this.phase !== "playing") return;
+        const effectiveDt = this.power === "slow_time" ? dt * (1 - (1 - 0.4) * Math.min(this.powerTimeLeft / POWER_DURATION, 1)) : dt;
         this.time = now - this._playStart;
         this._spawnEvents(audio);
-        this._updateTargets(cursor, audio);
-        this._updateProjectiles(dt, cursor, audio);
-        this._updateEffects(dt);
+        this._updateSlashes(gesture, audio);
+        this._updatePower(effectiveDt);
+        this._updateEffects(effectiveDt);
         this.health = Math.max(0, Math.min(MAX_HEALTH, this.health));
         if (this.health <= 0) {
           this.phase = "gameover";
@@ -98,7 +109,7 @@ var init_game = __esm({
         }
       }
       /** Advance game time directly (for testing without real clock) */
-      tick(dt, cursor, audio) {
+      tick(dt, gesture, audio) {
         if (this.phase === "countdown") {
           this.countdownValue -= dt;
           if (this.countdownValue <= 0) {
@@ -108,11 +119,12 @@ var init_game = __esm({
           return;
         }
         if (this.phase !== "playing") return;
+        const effectiveDt = this.power === "slow_time" ? dt * 0.4 : dt;
         this.time += dt;
         this._spawnEvents(audio);
-        this._updateTargets(cursor, audio);
-        this._updateProjectiles(dt, cursor, audio);
-        this._updateEffects(dt);
+        this._updateSlashes(gesture, audio);
+        this._updatePower(effectiveDt);
+        this._updateEffects(effectiveDt);
         this.health = Math.max(0, Math.min(MAX_HEALTH, this.health));
         if (this.health <= 0) {
           this.phase = "gameover";
@@ -135,81 +147,51 @@ var init_game = __esm({
       _spawnEvents(audio) {
         while (this.nextEvent < this.beatmap.events.length) {
           const event = this.beatmap.events[this.nextEvent];
-          const spawnTime = event.type === "target" ? event.time - APPROACH_TIME : event.time;
+          const progress = Math.min(event.time / this.beatmap.duration, 1);
+          const approachTime = APPROACH_TIME_MAX - (APPROACH_TIME_MAX - APPROACH_TIME_MIN) * progress;
+          const spawnTime = event.time - approachTime;
           if (spawnTime <= this.time) {
-            if (event.type === "target") {
-              this.targets.push({
-                x: event.x,
-                y: event.y,
-                time: event.time,
-                hit: false,
-                missed: false
-              });
-              audio.playTick();
-            } else {
-              this.projectiles.push({
-                x: event.x,
-                y: event.y,
-                dx: event.dx,
-                dy: event.dy,
-                speed: event.speed
-              });
-            }
+            const lane = typeof event.lane === "number" ? event.lane : 0;
+            this.slashes.push({
+              lane,
+              time: event.time,
+              approachTime,
+              hit: false,
+              missed: false
+            });
+            audio.playTick();
             this.nextEvent++;
           } else {
             break;
           }
         }
       }
-      _updateTargets(cursor, audio) {
-        for (let i = this.targets.length - 1; i >= 0; i--) {
-          const target = this.targets[i];
-          const timeDiff = this.time - target.time;
-          if (!target.hit && !target.missed && Math.abs(timeDiff) <= GOOD_WINDOW) {
-            const dx = cursor.x - target.x;
-            const dy = cursor.y - target.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist < HIT_RADIUS) {
-              target.hit = true;
+      _updateSlashes(gesture, audio) {
+        for (let i = this.slashes.length - 1; i >= 0; i--) {
+          const slash = this.slashes[i];
+          const timeDiff = this.time - slash.time;
+          if (!slash.hit && !slash.missed && Math.abs(timeDiff) <= GOOD_WINDOW) {
+            if (gesture.lanesPressed[slash.lane]) {
+              slash.hit = true;
               const isPerfect = Math.abs(timeDiff) <= PERFECT_WINDOW;
-              this._registerHit(isPerfect, target, audio);
+              this._registerHit(isPerfect, slash, audio);
             }
           }
-          if (!target.hit && !target.missed && timeDiff > GOOD_WINDOW) {
-            target.missed = true;
-            this._registerMiss(target, audio);
+          if (!slash.hit && !slash.missed && timeDiff > GOOD_WINDOW) {
+            slash.missed = true;
+            this._registerMiss(slash, audio);
           }
           if (timeDiff > GOOD_WINDOW + 0.8) {
-            this.targets.splice(i, 1);
+            this.slashes.splice(i, 1);
           }
         }
       }
-      _updateProjectiles(dt, cursor, audio) {
-        for (let i = this.projectiles.length - 1; i >= 0; i--) {
-          const p = this.projectiles[i];
-          p.x += p.dx * p.speed * dt;
-          p.y += p.dy * p.speed * dt;
-          const dx = cursor.x - p.x;
-          const dy = cursor.y - p.y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < PROJECTILE_RADIUS + CURSOR_RADIUS) {
-            this.health -= PROJECTILE_DAMAGE;
-            this.combo = 0;
-            this._lastComboMilestone = 0;
-            audio.playDamage();
-            this.effects.push({
-              type: "damage",
-              x: p.x,
-              y: p.y,
-              life: DAMAGE_EFFECT_DURATION,
-              maxLife: DAMAGE_EFFECT_DURATION
-            });
-            this.projectiles.splice(i, 1);
-            continue;
-          }
-          if (p.x < -0.15 || p.x > 1.15 || p.y < -0.15 || p.y > 1.15) {
-            this.projectiles.splice(i, 1);
-          }
+      _updatePower(dt) {
+        if (this.power === "none") return;
+        this.powerTimeLeft -= dt;
+        if (this.powerTimeLeft <= 0) {
+          this.power = "none";
+          this.powerTimeLeft = 0;
         }
       }
       _updateEffects(dt) {
@@ -220,7 +202,11 @@ var init_game = __esm({
           }
         }
       }
-      _registerHit(isPerfect, target, audio) {
+      _activatePower(power) {
+        this.power = power;
+        this.powerTimeLeft = POWER_DURATION;
+      }
+      _registerHit(isPerfect, slash, audio) {
         this.combo++;
         if (this.combo > this.maxCombo) this.maxCombo = this.combo;
         const multiplier = Math.min(
@@ -228,14 +214,19 @@ var init_game = __esm({
           MAX_MULTIPLIER
         );
         const baseScore = isPerfect ? PERFECT_SCORE : GOOD_SCORE;
-        this.score += baseScore * multiplier;
+        const boostMult = this.power === "score_boost" ? SCORE_BOOST_MULTIPLIER : 1;
+        this.score += baseScore * multiplier * boostMult;
+        const effectX = laneCenterX(slash.lane);
+        const effectY = LANE_HIT_Y;
         if (isPerfect) {
           this.hits.perfect++;
           audio.playHit(1);
+          audio.playSlash(1);
           this.health = Math.min(MAX_HEALTH, this.health + PERFECT_HEAL);
         } else {
           this.hits.good++;
           audio.playHit(0.6);
+          audio.playSlash(0.6);
         }
         const milestone = Math.floor(this.combo / COMBO_MILESTONE) * COMBO_MILESTONE;
         if (milestone > 0 && milestone > this._lastComboMilestone) {
@@ -249,16 +240,23 @@ var init_game = __esm({
             maxLife: COMBO_EFFECT_DURATION,
             value: milestone
           });
+          if (milestone === POWER_SLOW_TIME_COMBO) {
+            this._activatePower("slow_time");
+          } else if (milestone === POWER_SHIELD_COMBO) {
+            this._activatePower("shield");
+          } else if (milestone === POWER_SCORE_BOOST_COMBO) {
+            this._activatePower("score_boost");
+          }
         }
         this.effects.push({
           type: isPerfect ? "perfect" : "good",
-          x: target.x,
-          y: target.y,
+          x: effectX,
+          y: effectY,
           life: HIT_EFFECT_DURATION,
           maxLife: HIT_EFFECT_DURATION
         });
       }
-      _registerMiss(target, audio) {
+      _registerMiss(slash, audio) {
         this.hits.miss++;
         this.combo = 0;
         this._lastComboMilestone = 0;
@@ -266,8 +264,8 @@ var init_game = __esm({
         audio.playMiss();
         this.effects.push({
           type: "miss",
-          x: target.x,
-          y: target.y,
+          x: laneCenterX(slash.lane),
+          y: LANE_HIT_Y,
           life: MISS_EFFECT_DURATION,
           maxLife: MISS_EFFECT_DURATION
         });
@@ -277,64 +275,68 @@ var init_game = __esm({
 });
 
 // src/game/beatmap.ts
-function clamp(v, min, max) {
-  return Math.max(min, Math.min(max, v));
+function xToLane(x) {
+  let best = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < LANE_COUNT; i++) {
+    const center = (i + 1) / (LANE_COUNT + 1);
+    const dist = Math.abs(x - center);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best;
 }
-function randomTunnelProjectile(time, progress) {
-  const angle = Math.random() * Math.PI * 2;
-  let dx = Math.cos(angle);
-  let dy = Math.sin(angle);
-  const len = Math.sqrt(dx * dx + dy * dy);
-  dx /= len;
-  dy /= len;
+function convertLegacyBeatmap(raw) {
+  const events = raw.events.map((e, i) => {
+    if (typeof e.lane === "number" && e.lane >= 0 && e.lane < LANE_COUNT) {
+      return {
+        time: e.time,
+        type: "slash",
+        lane: e.lane
+      };
+    }
+    if (typeof e.x === "number") {
+      return {
+        time: e.time,
+        type: "slash",
+        lane: xToLane(e.x)
+      };
+    }
+    return {
+      time: e.time,
+      type: "slash",
+      lane: i % LANE_COUNT
+    };
+  });
   return {
-    time,
-    type: "projectile",
-    x: 0.5,
-    y: 0.5,
-    dx,
-    dy,
-    speed: 0.25 + progress * 0.35
+    bpm: raw.bpm,
+    duration: raw.duration,
+    events,
+    energyTimeline: raw.energyTimeline
   };
 }
 function generateBeatmap(bpm = 140, duration = 60) {
   const events = [];
   const beatInterval = 60 / bpm;
   let time = 3;
-  let lastX = 0.5;
-  let lastY = 0.5;
-  let side = 0;
+  let lastLane = -1;
   while (time < duration - 5) {
     const progress = time / duration;
     const interval = progress < 0.2 ? beatInterval * 2 : progress < 0.5 ? beatInterval : progress < 0.8 ? beatInterval * 0.75 : beatInterval * 0.5;
-    const maxDist = Math.min(interval * 0.6, 0.4);
-    let tx, ty;
-    if (Math.random() < 0.3) {
-      tx = lastX + (Math.random() - 0.5) * maxDist * 2;
-      ty = lastY + (Math.random() - 0.5) * maxDist * 2;
+    let lane;
+    if (progress < 0.25) {
+      const innerLanes = [1, 2];
+      const filtered = innerLanes.filter((l) => l !== lastLane);
+      lane = filtered.length > 0 ? filtered[Math.floor(Math.random() * filtered.length)] : innerLanes[Math.floor(Math.random() * innerLanes.length)];
     } else {
-      tx = side === 0 ? 0.2 + Math.random() * 0.25 : 0.55 + Math.random() * 0.25;
-      ty = 0.2 + Math.random() * 0.6;
-      side = 1 - side;
-      const ddx = tx - lastX;
-      const ddy = ty - lastY;
-      const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-      if (dist > maxDist * 1.5) {
-        tx = lastX + ddx / dist * maxDist * 1.2;
-        ty = lastY + ddy / dist * maxDist * 1.2;
-      }
+      const allLanes = Array.from({ length: LANE_COUNT }, (_, i) => i);
+      const filtered = allLanes.filter((l) => l !== lastLane);
+      lane = filtered[Math.floor(Math.random() * filtered.length)];
     }
-    tx = clamp(tx, 0.1, 0.9);
-    ty = clamp(ty, 0.1, 0.9);
-    events.push({ time, type: "target", x: tx, y: ty });
-    lastX = tx;
-    lastY = ty;
-    if (progress > 0.35 && Math.random() < (progress - 0.3) * 0.5) {
-      events.push(randomTunnelProjectile(time + beatInterval * 0.5, progress));
-    }
-    if (progress > 0.7 && Math.random() < 0.3) {
-      events.push(randomTunnelProjectile(time + beatInterval * 0.25, progress));
-    }
+    events.push({ time, type: "slash", lane });
+    lastLane = lane;
     time += interval;
   }
   events.sort((a, b) => a.time - b.time);
@@ -342,6 +344,7 @@ function generateBeatmap(bpm = 140, duration = 60) {
 }
 var init_beatmap = __esm({
   "src/game/beatmap.ts"() {
+    init_constants();
   }
 });
 
@@ -562,6 +565,38 @@ var init_audio = __esm({
           noise.stop(t + 0.06);
         });
       }
+      /** Sharp whoosh for slash gesture: noise burst + high-frequency sweep. */
+      playSlash(intensity) {
+        this._play((t, ctx) => {
+          const intens = Math.max(0.1, intensity);
+          const bufSize = ctx.sampleRate * 0.08;
+          const noiseBuf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+          const data = noiseBuf.getChannelData(0);
+          for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+          const noise = ctx.createBufferSource();
+          noise.buffer = noiseBuf;
+          const hp = ctx.createBiquadFilter();
+          hp.type = "highpass";
+          hp.frequency.setValueAtTime(2e3, t);
+          hp.frequency.exponentialRampToValueAtTime(6e3, t + 0.05);
+          const noiseGain = ctx.createGain();
+          noiseGain.gain.setValueAtTime(0.18 * intens, t);
+          noiseGain.gain.exponentialRampToValueAtTime(1e-3, t + 0.08);
+          noise.connect(hp).connect(noiseGain).connect(ctx.destination);
+          noise.start(t);
+          noise.stop(t + 0.09);
+          const osc = ctx.createOscillator();
+          const oscGain = ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(3e3 * intens, t);
+          osc.frequency.exponentialRampToValueAtTime(800, t + 0.06);
+          oscGain.gain.setValueAtTime(0.06 * intens, t);
+          oscGain.gain.exponentialRampToValueAtTime(1e-3, t + 0.06);
+          osc.connect(oscGain).connect(ctx.destination);
+          osc.start(t);
+          osc.stop(t + 0.07);
+        });
+      }
       /** Dark power chord C2-G2-C3 with sawtooth (replaces cheerful C5-E5-G5 arpeggio). */
       playCombo() {
         this._play((t, ctx) => {
@@ -596,12 +631,25 @@ var init_audio = __esm({
 });
 
 // src/browser/input.ts
-var CURSOR_LANDMARK, HAND_CLAMP_MIN, HAND_CLAMP_MAX, InputManager;
+var CURSOR_LANDMARK, HAND_CLAMP_MIN, HAND_CLAMP_MAX, FINGER_TIP_LANDMARKS, VELOCITY_WINDOW, KEY_LANE_MAP, InputManager;
 var init_input = __esm({
   "src/browser/input.ts"() {
-    CURSOR_LANDMARK = 8;
+    init_constants();
+    CURSOR_LANDMARK = 9;
     HAND_CLAMP_MIN = 0.25;
     HAND_CLAMP_MAX = 0.75;
+    FINGER_TIP_LANDMARKS = [8, 12, 16, 20];
+    VELOCITY_WINDOW = 3;
+    KEY_LANE_MAP = {
+      "a": 0,
+      "A": 0,
+      "s": 1,
+      "S": 1,
+      "d": 2,
+      "D": 2,
+      "f": 3,
+      "F": 3
+    };
     InputManager = class {
       constructor(canvas, video) {
         this.canvas = canvas;
@@ -616,11 +664,23 @@ var init_input = __esm({
         /** Hand input clamp boundaries (normalized camera coords). */
         __publicField(this, "clampMin", HAND_CLAMP_MIN);
         __publicField(this, "clampMax", HAND_CLAMP_MAX);
+        /** Current gesture sample: which lanes are pressed this frame. */
+        __publicField(this, "gesture", { lanesPressed: [false, false, false, false] });
         __publicField(this, "_raw", { x: 0.5, y: 0.5 });
         __publicField(this, "_smoothingSpeed", 12);
+        // Per-finger velocity tracking for downward flick detection
+        __publicField(this, "_fingerPrevY", [0.5, 0.5, 0.5, 0.5]);
+        __publicField(this, "_fingerPrevTime", [0, 0, 0, 0]);
+        __publicField(this, "_fingerVelSamples", [[], [], [], []]);
+        // vy samples per finger
+        __publicField(this, "_fingerLanesPressed", [false, false, false, false]);
+        // Keyboard lane presses (edge-triggered, cleared after each frame)
+        __publicField(this, "_keyLanesPressed", [false, false, false, false]);
         canvas.addEventListener("mousemove", (e) => {
-          this._raw.x = e.clientX / window.innerWidth;
-          this._raw.y = e.clientY / window.innerHeight;
+          const nx = e.clientX / window.innerWidth;
+          const ny = e.clientY / window.innerHeight;
+          this._raw.x = nx;
+          this._raw.y = ny;
           if (this.mode !== "hand") this.mode = "mouse";
           this.detected = true;
         });
@@ -629,8 +689,10 @@ var init_input = __esm({
           (e) => {
             e.preventDefault();
             const t = e.touches[0];
-            this._raw.x = t.clientX / window.innerWidth;
-            this._raw.y = t.clientY / window.innerHeight;
+            const nx = t.clientX / window.innerWidth;
+            const ny = t.clientY / window.innerHeight;
+            this._raw.x = nx;
+            this._raw.y = ny;
             if (this.mode !== "hand") this.mode = "touch";
             this.detected = true;
           },
@@ -641,13 +703,21 @@ var init_input = __esm({
           (e) => {
             e.preventDefault();
             const t = e.touches[0];
-            this._raw.x = t.clientX / window.innerWidth;
-            this._raw.y = t.clientY / window.innerHeight;
+            const nx = t.clientX / window.innerWidth;
+            const ny = t.clientY / window.innerHeight;
+            this._raw.x = nx;
+            this._raw.y = ny;
             if (this.mode !== "hand") this.mode = "touch";
             this.detected = true;
           },
           { passive: false }
         );
+        window.addEventListener("keydown", (e) => {
+          const lane = KEY_LANE_MAP[e.key];
+          if (lane !== void 0) {
+            this._keyLanesPressed[lane] = true;
+          }
+        });
       }
       async init() {
         try {
@@ -665,6 +735,25 @@ var init_input = __esm({
         const factor = 1 - Math.exp(-this._smoothingSpeed * dt);
         this.cursor.x += (this._raw.x - this.cursor.x) * factor;
         this.cursor.y += (this._raw.y - this.cursor.y) * factor;
+        const merged = [false, false, false, false];
+        for (let i = 0; i < LANE_COUNT; i++) {
+          merged[i] = this._keyLanesPressed[i] || this._fingerLanesPressed[i];
+        }
+        this.gesture = { lanesPressed: merged };
+        this._keyLanesPressed = [false, false, false, false];
+      }
+      _pushFingerVelocity(finger, vy) {
+        const samples = this._fingerVelSamples[finger];
+        samples.push(vy);
+        if (samples.length > VELOCITY_WINDOW) {
+          samples.shift();
+        }
+        let avg = 0;
+        for (let i = 0; i < samples.length; i++) {
+          avg += samples[i];
+        }
+        avg /= samples.length;
+        this._fingerLanesPressed[finger] = avg > FINGER_SPEED_THRESHOLD;
       }
       async _initHandTracking() {
         const W = window;
@@ -685,12 +774,27 @@ var init_input = __esm({
             const hand = results.multiHandLandmarks[0];
             this.landmarks = hand;
             const point = hand[CURSOR_LANDMARK];
+            if (!point) return;
             this._raw.x = this._mapRange(1 - point.x, HAND_CLAMP_MIN, HAND_CLAMP_MAX, 0, 1);
             this._raw.y = this._mapRange(point.y, HAND_CLAMP_MIN, HAND_CLAMP_MAX, 0, 1);
             this.mode = "hand";
             this.detected = true;
+            const now = performance.now() / 1e3;
+            for (let f = 0; f < FINGER_TIP_LANDMARKS.length; f++) {
+              const tip = hand[FINGER_TIP_LANDMARKS[f]];
+              if (!tip) continue;
+              const elapsed = now - this._fingerPrevTime[f];
+              if (this._fingerPrevTime[f] > 0 && elapsed > 0 && elapsed < 0.2) {
+                const vy = (tip.y - this._fingerPrevY[f]) / elapsed;
+                this._pushFingerVelocity(f, vy);
+              }
+              this._fingerPrevY[f] = tip.y;
+              this._fingerPrevTime[f] = now;
+            }
           } else {
             this.landmarks = null;
+            this._fingerLanesPressed = [false, false, false, false];
+            this._fingerVelSamples = [[], [], [], []];
           }
         });
         const camera = new W.Camera(this.video, {
@@ -789,7 +893,7 @@ function resizeFBO(gl, fbo, w, h) {
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, w, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
   gl.bindTexture(gl.TEXTURE_2D, null);
 }
-var FAR_Z, RING_COUNT, STREAK_COUNT, TUNNEL_RADIUS, SIDES, MAX_LINES, MAX_CIRCLES, RING_SEGMENTS, PARALLAX_STRENGTH, COL, HAND_CONNECTIONS, FLAT_VS, FLAT_FS, CIRCLE_VS, CIRCLE_FS, SCREEN_VS, BG_FS, GLOW_FS, EXTRACT_FS, BLUR_FS, FINAL_FS, Renderer;
+var FAR_Z, RING_COUNT, STREAK_COUNT, TUNNEL_RADIUS, SIDES, MAX_LINES, MAX_CIRCLES, RING_SEGMENTS, PARALLAX_STRENGTH, LANE_COLORS, COL, HAND_CONNECTIONS, FLAT_VS, FLAT_FS, CIRCLE_VS, CIRCLE_FS, SCREEN_VS, BG_FS, GLOW_FS, EXTRACT_FS, BLUR_FS, FINAL_FS, Renderer;
 var init_renderer = __esm({
   "src/browser/renderer.ts"() {
     init_constants();
@@ -802,13 +906,19 @@ var init_renderer = __esm({
     MAX_CIRCLES = 600;
     RING_SEGMENTS = 24;
     PARALLAX_STRENGTH = 0.25;
+    LANE_COLORS = [
+      [0, 1, 1],
+      // lane 0: cyan
+      [1, 0, 1],
+      // lane 1: magenta
+      [0, 1, 0.2],
+      // lane 2: green
+      [1, 0.6, 0]
+      // lane 3: orange
+    ];
     COL = {
       cursor: [0, 1, 1],
       // #0ff cyan
-      target: [1, 0, 1],
-      // #f0f magenta
-      projectile: [1, 0.267, 0.267],
-      // #f44
       perfect: [1, 1, 0],
       // #ff0
       good: [0, 1, 0],
@@ -1311,13 +1421,13 @@ void main() {
       // =========================================================================
       // Main render
       // =========================================================================
-      render(game, cursor, musicMuted = false, landmarks = null, cursorLandmarkIdx = 8, clampMin = 0.25, clampMax = 0.75) {
+      render(game, cursor, musicMuted = false, landmarks = null, cursorLandmarkIdx = 8, clampMin = 0.25, clampMax = 0.75, gesture = { lanesPressed: [false, false, false, false] }) {
         const gl = this.gl;
         const now = performance.now() / 1e3;
         const dt = this.lastRenderTime ? Math.min(now - this.lastRenderTime, 0.1) : 1 / 60;
         this.lastRenderTime = now;
         let energy = 0.15, hue = 220;
-        let drawTargets = false, drawProjectilesFlag = false, drawCursorFlag = false;
+        let drawLanesFlag = false, drawCursorFlag = false;
         let drawEffectsFlag = false, drawHUDFlag = false;
         if (game.phase === "menu") {
           energy = 0.15;
@@ -1336,8 +1446,7 @@ void main() {
           energy = this.getEnergy(game);
           const progress = game.time / game.beatmap.duration;
           hue = 220 + energy * 40 + progress * 20;
-          drawTargets = true;
-          drawProjectilesFlag = true;
+          drawLanesFlag = true;
           drawCursorFlag = true;
           drawEffectsFlag = true;
           drawHUDFlag = true;
@@ -1353,8 +1462,7 @@ void main() {
         this.drawBackground(energy, hue);
         this.drawVanishingGlow(energy, hue);
         this.drawTunnelMesh(energy, hue);
-        if (drawTargets) this.drawTargetsGL(game);
-        if (drawProjectilesFlag) this.drawProjectilesGL(game);
+        if (drawLanesFlag) this.drawLanesGL(game, gesture);
         if (drawCursorFlag) this.drawCursorGL(cursor);
         if (drawEffectsFlag) this.drawEffectsGL(game);
         this.flushLines();
@@ -1401,7 +1509,7 @@ void main() {
           this.drawGameOverHUD(game);
         }
         if (drawHUDFlag) {
-          this.drawPlayingHUD(game, musicMuted, energy);
+          this.drawPlayingHUD(game, musicMuted, energy, gesture);
         }
         this.drawCamDebugOverlay(landmarks, cursorLandmarkIdx, clampMin, clampMax);
       }
@@ -1616,75 +1724,72 @@ void main() {
         this.flushLines();
       }
       // =========================================================================
-      // Scene: Targets
+      // Scene: Lane-based game objects
       // =========================================================================
-      drawTargetsGL(game) {
+      /** Draw 4 lane tracks, hit zones, and approaching bullets. */
+      drawLanesGL(game, gesture) {
         const cx = this.w / 2;
         const cy = this.h / 2;
-        for (const target of game.targets) {
-          const timeDiff = game.time - target.time;
-          const approachProgress = 1 - (target.time - game.time) / APPROACH_TIME;
+        const hitY = this.py(LANE_HIT_Y);
+        const hitR = this.ps(0.035);
+        for (let i = 0; i < LANE_COUNT; i++) {
+          const laneX = this.px(LANE_CENTERS[i]);
+          const [cr, cg, cb] = LANE_COLORS[i];
+          this.addLine(cx, cy, laneX, hitY, cr, cg, cb, 0.08);
+          const pressed = gesture.lanesPressed[i];
+          const hitAlpha = pressed ? 0.7 : 0.2;
+          const hitGlow = pressed ? hitR * 1.8 : hitR * 1.2;
+          this.addCircle(laneX, hitY, hitGlow, cr, cg, cb, hitAlpha * 0.3);
+          this.addRing(laneX, hitY, hitR, cr, cg, cb, hitAlpha, 16);
+          this.addCircle(laneX, hitY, hitR * 0.25, cr, cg, cb, hitAlpha);
+        }
+        for (const slash of game.slashes) {
+          const timeDiff = game.time - slash.time;
+          const approachProgress = 1 - (slash.time - game.time) / slash.approachTime;
           if (approachProgress < 0) continue;
-          const actualX = this.px(target.x);
-          const actualY = this.py(target.y);
-          const baseR = this.ps(HIT_RADIUS * 0.5);
-          if (target.hit) {
-            const hitP = Math.max(0, timeDiff) / 0.3;
+          const laneX = this.px(LANE_CENTERS[slash.lane]);
+          const [cr, cg, cb] = LANE_COLORS[slash.lane] ?? [1, 1, 1];
+          const baseR = this.ps(0.03);
+          if (slash.hit) {
+            const hitP = Math.max(0, timeDiff) / 0.35;
             if (hitP > 1) continue;
-            const r = baseR * (1 + hitP * 2);
             const alpha = 1 - hitP;
-            this.addRing(actualX, actualY, r, 1, 1, 1, alpha, 16);
+            const ringR = hitR * (1 + hitP * 3);
+            this.addRing(laneX, hitY, ringR, cr, cg, cb, alpha * 0.7, 20);
+            const coreR = hitR * (1 - hitP * 0.5);
+            this.addCircle(laneX, hitY, Math.max(2, coreR), 1, 1, 1, alpha * 0.9);
+            this.addRing(laneX, hitY, ringR * 0.5, cr, cg, cb, alpha * 0.4, 12);
             continue;
           }
-          if (target.missed) {
+          if (slash.missed) {
             const missP = Math.max(0, timeDiff - 0.25) / 0.5;
             if (missP > 1) continue;
             const alpha = Math.max(0, 1 - missP) * 0.3;
-            this.addCircle(actualX, actualY, baseR, ...COL.miss, alpha);
+            const collapseR = hitR * (1 - missP * 0.6);
+            this.addRing(laneX, hitY, collapseR, ...COL.miss, alpha, 12);
+            this.addCircle(laneX, hitY, collapseR * 0.4, ...COL.miss, alpha * 0.5);
             continue;
           }
           const clamped = Math.min(approachProgress, 1);
           const z = 1 - clamped;
           const scale = this.perspScale(z);
-          const displayX = cx + (actualX - cx) * scale;
-          const displayY = cy + (actualY - cy) * scale;
-          const displayR = Math.max(2, baseR * scale);
-          const landingAlpha = clamped * clamped * 0.6;
-          this.addRing(actualX, actualY, baseR * 1.2, ...COL.target, landingAlpha, 16);
-          const crossLen = baseR * 0.5;
-          this.addLine(actualX - crossLen, actualY, actualX + crossLen, actualY, ...COL.target, landingAlpha);
-          this.addLine(actualX, actualY - crossLen, actualX, actualY + crossLen, ...COL.target, landingAlpha);
-          if (clamped < 0.9) {
-            const connAlpha = (1 - clamped) * 0.12;
-            this.addLine(displayX, displayY, actualX, actualY, ...COL.target, connAlpha);
+          const displayX = cx + (laneX - cx) * scale;
+          const displayY = cy + (hitY - cy) * scale;
+          const displayR = Math.max(3, baseR * scale);
+          const nearWindow = Math.abs(timeDiff) <= GOOD_WINDOW;
+          const pulse = nearWindow ? 1 + Math.sin(game.time * 14) * 0.15 : 1;
+          const landingAlpha = clamped * clamped * 0.55;
+          if (landingAlpha > 0.02 && nearWindow) {
+            this.addRing(laneX, hitY, hitR * 1.4 * pulse, cr, cg, cb, landingAlpha * 0.5, 12);
           }
-          const pulse = 1 + Math.sin(game.time * 8) * 0.1;
-          const orbAlpha = Math.min(clamped * 1.5, 0.9);
-          this.addCircle(displayX, displayY, displayR * 2.5 * pulse, ...COL.target, orbAlpha * 0.2);
-          this.addCircle(displayX, displayY, displayR * pulse, ...COL.target, orbAlpha);
+          if (clamped < 0.88) {
+            const connAlpha = (1 - clamped) * 0.08;
+            this.addLine(displayX, displayY, laneX, hitY, cr, cg, cb, connAlpha);
+          }
+          this.addCircle(displayX, displayY, displayR * 3.2 * pulse, cr, cg, cb, landingAlpha * 0.12);
+          this.addCircle(displayX, displayY, displayR * 1.8 * pulse, cr, cg, cb, Math.min(clamped * 1.2, 0.6));
+          this.addCircle(displayX, displayY, displayR * pulse, cr, cg, cb, Math.min(clamped * 1.5, 0.85));
           this.addCircle(displayX, displayY, displayR * 0.35, 1, 1, 1, Math.min(clamped * 2, 1));
-        }
-      }
-      // =========================================================================
-      // Scene: Projectiles
-      // =========================================================================
-      drawProjectilesGL(game) {
-        for (const p of game.projectiles) {
-          const pcx = this.px(p.x);
-          const pcy = this.py(p.y);
-          const r = this.ps(0.014);
-          this.addCircle(pcx, pcy, r * 4, ...COL.projectile, 0.12);
-          this.addCircle(pcx, pcy, r * 2.2, ...COL.projectile, 0.3);
-          this.addCircle(pcx, pcy, r, 1, 1, 1, 1);
-          this.addLine(pcx, pcy, pcx - p.dx * r * 6, pcy - p.dy * r * 6, ...COL.projectile, 0.6);
-          this.addLine(
-            pcx - p.dx * r * 6,
-            pcy - p.dy * r * 6,
-            pcx - p.dx * r * 10,
-            pcy - p.dy * r * 10,
-            ...COL.projectile,
-            0.25
-          );
         }
       }
       // =========================================================================
@@ -1693,7 +1798,7 @@ void main() {
       drawCursorGL(cursor) {
         const cursorX = this.px(cursor.x);
         const cursorY = this.py(cursor.y);
-        const r = this.ps(CURSOR_RADIUS);
+        const r = this.ps(0.025);
         this.addCircle(cursorX, cursorY, r * 4, ...COL.cursor, 0.08);
         this.addCircle(cursorX, cursorY, r * 2.2, ...COL.cursor, 0.2);
         this.addCircle(cursorX, cursorY, r * 1.4, ...COL.cursor, 0.45);
@@ -1716,7 +1821,7 @@ void main() {
           }
           if (effect.type === "damage") {
             const r = this.ps(progress * 0.12);
-            this.addCircle(ex, ey, r, ...COL.projectile, alpha * 0.4);
+            this.addCircle(ex, ey, r, ...COL.miss, alpha * 0.4);
             this.flushLines();
             this.flushCircles();
             this.drawOverlayRect(1, 0, 0, alpha * 0.18);
@@ -1783,7 +1888,7 @@ void main() {
       // =========================================================================
       // HUD: Playing phase
       // =========================================================================
-      drawPlayingHUD(game, musicMuted, energy) {
+      drawPlayingHUD(game, musicMuted, energy, gesture) {
         const ctx = this.hud;
         const pad = this.ps(0.02);
         const fontSize = this.ps(0.025);
@@ -1835,6 +1940,19 @@ void main() {
         ctx.textAlign = "right";
         ctx.textBaseline = "bottom";
         ctx.fillText(`${mins}:${secs.toString().padStart(2, "0")}`, this.w - pad, pBarY - 4);
+        const keyLabels = ["A", "S", "D", "F"];
+        const labelY = this.py(LANE_HIT_Y) + this.ps(0.06);
+        const labelSize = this.ps(0.022);
+        ctx.font = `bold ${labelSize}px 'Orbitron', sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        for (let i = 0; i < LANE_COUNT; i++) {
+          const laneX = this.px(LANE_CENTERS[i]);
+          const [cr, cg, cb] = LANE_COLORS[i];
+          const pressed = gesture.lanesPressed[i];
+          ctx.fillStyle = pressed ? `rgba(${Math.round(cr * 255)}, ${Math.round(cg * 255)}, ${Math.round(cb * 255)}, 1)` : `rgba(${Math.round(cr * 255)}, ${Math.round(cg * 255)}, ${Math.round(cb * 255)}, 0.4)`;
+          ctx.fillText(keyLabels[i], laneX, labelY);
+        }
         const btnSize = this.ps(0.03);
         const btnX = this.w - pad - btnSize;
         const btnY = eBarY + 6 + pad;
@@ -1859,6 +1977,7 @@ void main() {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText("C", btnX + btnSize / 2, camBtnY + btnSize / 2);
+        this.drawPowerHUD(game, camBtnY + btnSize + 8);
         for (const effect of game.effects) {
           const prog = 1 - effect.life / effect.maxLife;
           const alpha = 1 - prog;
@@ -1898,6 +2017,45 @@ void main() {
             ctx.globalAlpha = 1;
           }
         }
+      }
+      // =========================================================================
+      // HUD: Power indicator
+      // =========================================================================
+      drawPowerHUD(game, topY) {
+        if (game.power === "none") return;
+        const ctx = this.hud;
+        const pad = this.ps(0.02);
+        const barW = this.ps(0.12);
+        const barH = this.ps(0.012);
+        const barX = this.w - pad - barW;
+        const barY = topY;
+        const POWER_NAMES = {
+          slow_time: "SLOW TIME",
+          shield: "SHIELD",
+          score_boost: "SCORE x2"
+        };
+        const POWER_COLORS = {
+          slow_time: "#0ff",
+          shield: "#4af",
+          score_boost: "#ff0"
+        };
+        const name = POWER_NAMES[game.power] ?? game.power.toUpperCase();
+        const color = POWER_COLORS[game.power] ?? "#fff";
+        ctx.font = `bold ${this.ps(0.013)}px 'Orbitron', sans-serif`;
+        ctx.fillStyle = color;
+        ctx.textAlign = "right";
+        ctx.textBaseline = "top";
+        ctx.fillText(name, barX + barW, barY);
+        const labelH = this.ps(0.016);
+        const countBarY = barY + labelH + 2;
+        ctx.fillStyle = "#222";
+        ctx.fillRect(barX, countBarY, barW, barH);
+        const frac = game.powerTimeLeft / 5;
+        ctx.fillStyle = color;
+        ctx.fillRect(barX, countBarY, barW * Math.max(0, frac), barH);
+        ctx.strokeStyle = "#444";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(barX, countBarY, barW, barH);
       }
       // =========================================================================
       // HUD: Phase overlays
@@ -2162,7 +2320,7 @@ var require_main = __commonJS({
           audio.startMusic();
           musicStarted = true;
         }
-        game.update(now / 1e3, dt, input.cursor, audio);
+        game.update(now / 1e3, dt, input.gesture, audio);
       }
       if (musicMode && (game.phase === "results" || game.phase === "gameover")) {
         audio.stopMusic();
@@ -2175,7 +2333,8 @@ var require_main = __commonJS({
         input.landmarks,
         input.cursorLandmarkIndex,
         input.clampMin,
-        input.clampMax
+        input.clampMax,
+        input.gesture
       );
       requestAnimationFrame(loop);
     }
@@ -2183,7 +2342,7 @@ var require_main = __commonJS({
       try {
         const resp = await fetch(BEATMAP_URL);
         if (resp.ok) {
-          loadedBeatmap = await resp.json();
+          loadedBeatmap = convertLegacyBeatmap(await resp.json());
           await audio.loadMusic(MUSIC_URL);
           console.log(`Loaded beatmap: ${loadedBeatmap.events.length} events, ${loadedBeatmap.duration.toFixed(0)}s`);
         }
@@ -2260,9 +2419,11 @@ var require_main = __commonJS({
         }, playMiss() {
         }, playDamage() {
         }, playCombo() {
+        }, playSlash() {
         } };
         const cursor = { x: cursorX, y: cursorY };
-        game.tick(dt, cursor, nullAudio);
+        const nullGesture = { lanesPressed: [false, false, false, false] };
+        game.tick(dt, nullGesture, nullAudio);
         renderer.render(game, cursor);
       },
       /** Render current state without advancing time. */
